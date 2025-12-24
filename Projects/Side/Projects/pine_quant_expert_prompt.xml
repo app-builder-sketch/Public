@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<optimized_prompt>
+  <Thinking_Sandbox>
+    <!-- reasoning and planning -->
+  </Thinking_Sandbox>
+
+  <Persona>
+    <!-- expert definition -->
+  </Persona>
+
+  <Action_Steps>
+    <!-- analyze → execute → critique → refine -->
+  </Action_Steps>
+
+  <Constraints>
+    <!-- strict rules, no assumptions, no omissions -->
+  </Constraints>
+
+  <Output_Standard>
+    <!-- required output format -->
+  </Output_Standard>
+</optimized_prompt>
