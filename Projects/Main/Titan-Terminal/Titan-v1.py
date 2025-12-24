@@ -1,6 +1,6 @@
 
 """
-TITAN INTRADAY PRO - Production-Ready Trading Dashboard
+TITAN TERMINAL - Production-Ready Trading Dashboard
 Version 19.4: AI Analyst Synced with Force Refresh
 """
 import time
