@@ -12,7 +12,7 @@ import datetime
 import requests
 import urllib.parse
 from scipy.stats import linregress
-import matplotlib.pyplot as plt  # <--- FIXED: Added to ensure Pandas styling works
+import matplotlib.pyplot as plt  # Explicitly imported to ensure Pandas styling works
 
 # ==========================================
 # 1. PAGE CONFIGURATION & CUSTOM UI
