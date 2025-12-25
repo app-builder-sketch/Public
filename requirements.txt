@@ -10,3 +10,4 @@ ccxt
 openai>=1.0.0
 anthropic
 google-generativeai
+xlsxwriter
