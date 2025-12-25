@@ -6,10 +6,11 @@ from datetime import datetime
 from typing import Dict, Any, List, Optional
 
 # =============================================================================
-# Simplified Apex Toolkit: Notes + Multi-format Export
+# Apex Mobile: Simplified Mobile-First Notes
 # =============================================================================
 
-st.set_page_config(page_title="Simple Notes", page_icon="📝", layout="wide")
+# 'centered' layout reads better on phones than 'wide'
+st.set_page_config(page_title="Apex Mobile", page_icon="📱", layout="centered")
 
 # ----------------------------
 # Helpers
@@ -78,75 +79,82 @@ def delete_note(nid):
     st.rerun()
 
 # =============================================================================
-# UI Layout
+# Mobile UI Layout
 # =============================================================================
 
-# --- Sidebar: Note List ---
-with st.sidebar:
-    st.title("📝 Notes")
-    if st.button("➕ New Note", use_container_width=True):
+st.title("📱 Apex Notes")
+
+# --- Top Control Bar ---
+# We use columns here, but simple ones that stack well if needed
+col_nav, col_new = st.columns([0.7, 0.3])
+
+with col_new:
+    if st.button("➕ New", use_container_width=True):
         create_note()
         st.rerun()
-    
-    st.markdown("---")
-    
-    if not st.session_state.notes:
-        st.info("No notes yet.")
-    else:
-        # Sort by ID descending (newest first)
-        sorted_notes = sorted(st.session_state.notes, key=lambda x: x["id"], reverse=True)
-        
-        # Create a dictionary for the radio button labels
-        note_map = {f"#{n['id']} {n['title']}": n["id"] for n in sorted_notes}
-        
-        # Find index of currently active note for the UI selector
-        current_idx = 0
-        if st.session_state.active_id:
-            current_ids = list(note_map.values())
-            if st.session_state.active_id in current_ids:
-                current_idx = current_ids.index(st.session_state.active_id)
 
-        selection = st.radio(
-            "Select Note", 
-            options=note_map.keys(), 
-            index=current_idx,
+with col_nav:
+    if not st.session_state.notes:
+        st.write("Create a note to start.")
+        active_note = None
+    else:
+        # Create a lookup for the selectbox
+        # Sort newest first
+        sorted_notes = sorted(st.session_state.notes, key=lambda x: x["id"], reverse=True)
+        note_options = {f"{n['title']}": n["id"] for n in sorted_notes}
+        
+        # Determine index of current selection
+        current_index = 0
+        if st.session_state.active_id in note_options.values():
+            # Find the key (title) that corresponds to the active ID
+            curr_key = next(k for k, v in note_options.items() if v == st.session_state.active_id)
+            current_index = list(note_options.keys()).index(curr_key)
+
+        selected_label = st.selectbox(
+            "Select Note",
+            options=list(note_options.keys()),
+            index=current_index,
             label_visibility="collapsed"
         )
-        st.session_state.active_id = note_map[selection]
+        
+        # Update active ID based on selection
+        if selected_label:
+            st.session_state.active_id = note_options[selected_label]
+            active_note = get_note(st.session_state.active_id)
+        else:
+            active_note = None
 
-# --- Main Area: Editor & Export ---
-active_note = get_note(st.session_state.active_id)
+st.markdown("---")
 
+# --- Main Editor ---
 if active_note:
-    st.subheader(f"Editing: {active_note['title']}")
+    # 1. Title Input
+    new_title = st.text_input("Title", value=active_note["title"], label_visibility="collapsed", placeholder="Note Title...")
     
-    # Inputs
-    new_title = st.text_input("Title", value=active_note["title"])
-    new_body = st.text_area("Content", value=active_note["body"], height=300)
+    # 2. Body Input
+    # Height is reduced slightly to fit mobile screens better without scrolling too much
+    new_body = st.text_area("Body", value=active_note["body"], height=350, label_visibility="collapsed", placeholder="Start typing...")
 
-    # Save logic (Updates state immediately on interaction)
+    # Update State
     if new_title != active_note["title"] or new_body != active_note["body"]:
         active_note["title"] = new_title
         active_note["body"] = new_body
+        active_note["updated_at"] = now_stamp()
 
-    st.markdown("---")
-    
-    # Export Section
-    col1, col2, col3 = st.columns([0.2, 0.2, 0.6])
-    
-    with col1:
+    # --- Mobile Toolbox (Expandable) ---
+    # Kept closed by default to save space
+    with st.expander("🛠️ Toolbox (Export / Delete)", expanded=False):
+        
+        st.caption("Export Options")
         fmt = st.selectbox("Format", ["txt", "xml", "json"])
-    
-    with col2:
-        # Prepare Download Data
+        
+        # Prepare Data
         file_data = ""
         mime_type = "text/plain"
         ext = ".txt"
 
         if fmt == "txt":
             file_data = f"{active_note['title']}\n{'-'*20}\n{active_note['body']}"
-            mime_type = "text/plain"
-            ext = ".txt"
         elif fmt == "xml":
             file_data = note_to_xml(active_note)
             mime_type = "application/xml"
@@ -156,18 +164,20 @@ if active_note:
             mime_type = "application/json"
             ext = ".json"
 
+        # Big Tappable Download Button
         st.download_button(
-            label="⬇️ Download",
+            label="⬇️ Download File",
             data=file_data,
             file_name=safe_filename(ensure_ext(active_note["title"], ext)),
             mime=mime_type,
             use_container_width=True
         )
-
-    with col3:
-        if st.button("🗑️ Delete Note", type="primary"):
+        
+        st.markdown("---")
+        
+        # Big Tappable Delete Button
+        if st.button("🗑️ Delete Note", type="primary", use_container_width=True):
             delete_note(active_note["id"])
 
 else:
-    st.markdown("### 👋 Welcome")
-    st.write("Select a note from the sidebar or click **New Note** to get started.")
+    st.info("👆 Tap 'New' to create a note.")
