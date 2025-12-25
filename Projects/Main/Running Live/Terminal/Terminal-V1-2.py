@@ -1,5 +1,4 @@
 
-
 import streamlit as st
 import yfinance as yf
 import plotly.graph_objects as go
@@ -13,6 +12,7 @@ import datetime
 import requests
 import urllib.parse
 from scipy.stats import linregress
+import matplotlib.pyplot as plt  # <--- FIXED: Added to ensure Pandas styling works
 
 # ==========================================
 # 1. PAGE CONFIGURATION & CUSTOM UI
@@ -80,19 +80,21 @@ st.markdown('<div class="title-glow">👁️ DarkPool Titan Terminal</div>', uns
 st.markdown("##### *Institutional-Grade Market Intelligence*")
 st.markdown("---")
 
-# --- API Key Management ---
+# --- API Key Management (UPGRADED FOR SECRETS) ---
 if 'api_key' not in st.session_state:
     st.session_state.api_key = None
 
+# 1. Check Streamlit Secrets First
 if "OPENAI_API_KEY" in st.secrets:
     st.session_state.api_key = st.secrets["OPENAI_API_KEY"]
-else:
-    if not st.session_state.api_key:
-        st.session_state.api_key = st.sidebar.text_input(
-            "OpenAI API Key", 
-            type="password",
-            help="Enter your OpenAI API key here to unlock the AI Analyst features."
-        )
+
+# 2. Fallback to Manual Input
+if not st.session_state.api_key:
+    st.session_state.api_key = st.sidebar.text_input(
+        "OpenAI API Key", 
+        type="password",
+        help="Enter your OpenAI API key here to unlock the AI Analyst features."
+    )
 
 # ==========================================
 # 2. DATA ENGINE (OPTIMIZED FOR SPEED)
@@ -903,11 +905,13 @@ st.sidebar.subheader("📢 Social Broadcaster")
 if 'tg_token' not in st.session_state: st.session_state.tg_token = ""
 if 'tg_chat' not in st.session_state: st.session_state.tg_chat = ""
 
-# 2. Check Secrets
-if "TELEGRAM_TOKEN" in st.secrets: st.session_state.tg_token = st.secrets["TELEGRAM_TOKEN"]
-if "TELEGRAM_CHAT_ID" in st.secrets: st.session_state.tg_chat = st.secrets["TELEGRAM_CHAT_ID"]
+# 2. Check Secrets (UPGRADE: Auto-load from st.secrets if available)
+if "TELEGRAM_TOKEN" in st.secrets:
+    st.session_state.tg_token = st.secrets["TELEGRAM_TOKEN"]
+if "TELEGRAM_CHAT_ID" in st.secrets:
+    st.session_state.tg_chat = st.secrets["TELEGRAM_CHAT_ID"]
 
-# 3. Create Inputs (Auto-filled if secrets exist)
+# 3. Create Inputs (Auto-filled if secrets exist, allowing manual override if needed)
 tg_token = st.sidebar.text_input("Telegram Bot Token", value=st.session_state.tg_token, type="password", help="Enter your Telegram Bot Token")
 tg_chat = st.sidebar.text_input("Telegram Chat ID", value=st.session_state.tg_chat, help="Enter your Telegram Chat ID")
 
@@ -1264,7 +1268,7 @@ if st.session_state.get('run_analysis'):
 
                 col_b1, col_b2 = st.columns(2)
 
-                # FIX: Telegram Infinite Split Message Logic
+                # FIX: Telegram Infinite Split Message Logic & Use Variables from Sidebar
                 if col_b1.button("Send to Telegram 🚀"):
                     if tg_token and tg_chat:
                         try:
