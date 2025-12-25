@@ -2,7 +2,7 @@
 INTRADAY SIGNAL DASHBOARD - MOBILE EDITION
 Version 18.2: Telegram Signals (Complete) + De-dup + Auto Broadcast + Templates
 
-WHAT WAS MISSING (NOW INCLUDED, NO OMISSIONS):
+(NO OMISSIONS):
 ✅ Multi-recipient broadcast (comma-separated chat IDs and/or @channel usernames)
 ✅ Test connection (getMe + ping message)
 ✅ Auto-send modes (Manual / Auto Core / Auto Confirmed / Auto Any)
