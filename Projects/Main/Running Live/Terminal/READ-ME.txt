@@ -1,0 +1,103 @@
+================================================================================
+                           TITAN TERMINAL v1.2
+                 Institutional-Grade Market Intelligence Dashboard
+================================================================================
+
+OVERVIEW
+--------
+The Titan Terminal is a high-performance financial analytics dashboard built with 
+Python and Streamlit. It integrates "God Mode" technical indicators, AI-powered 
+market analysis, and social broadcasting capabilities into a single "Dark Pool" 
+aesthetic interface.
+
+It is designed for traders who need real-time multi-asset intelligence (Stocks, 
+Crypto, Forex, Commodities) without switching between multiple apps.
+
+--------------------------------------------------------------------------------
+CORE FEATURES
+--------------------------------------------------------------------------------
+
+1. "GOD MODE" TECHNICAL ANALYSIS
+   - Combines 10+ advanced algorithmic indicators into a single view.
+   - Key Indicators:
+     * Apex Trend & Liquidity Cloud (HMA + ATR Bands)
+     * DarkPool Squeeze Momentum (Custom Bollinger/Keltner logic)
+     * Money Flow Matrix (Volume-weighted RSI)
+     * Dark Vector Scalping (Staircase logic)
+     * Elastic Volume Weighted Momentum (EVWM)
+   - Generates a composite "Titan Score" (0-5) to indicate strong Buy/Sell signals.
+
+2. AI ANALYST (GPT-4o INTEGRATION)
+   - Uses OpenAI's GPT-4o to act as a Senior Market Analyst.
+   - Reads the raw technical data (Trend, RSI, Volatility, Titan Score).
+   - Generates a concise, emoji-rich executive summary of the market structure.
+   - Detects psychological states like "Algorithmic FOMO" or "Panic Selling."
+
+3. SOCIAL BROADCASTER & COMMAND CENTER
+   - Telegram Integration: Sends formatted trade signals (Price, Score, AI Verdict)
+     directly to a Telegram channel/group.
+   - Smart Splitting: Automatically handles long messages to bypass character limits.
+   - Chart Uploads: Allows attaching screenshots to Telegram broadcasts.
+   - Twitter/X Integration: One-click button to launch a pre-filled Tweet with analysis.
+   - TradingView Widget: Embedded interactive chart for drawing and deep dives.
+
+4. GLOBAL MACRO & SECTOR INTELLIGENCE
+   - Real-time tracking of 40+ global assets (S&P 500, Bitcoin, Gold, Oil, Yields).
+   - Grouped by sector (Risk Assets, Energy, Forex, etc.) for quick health checks.
+   - Sector Performance Heatmap: Visualizes which sectors are leading/lagging.
+
+5. QUANTITATIVE & PROBABILITY ENGINES
+   - Monte Carlo Simulation: forecasts 30-day future price paths based on volatility.
+   - Seasonality DNA: Analyzes historical monthly and day-of-week performance.
+   - Volume Profile (VPVR): Identifies institutional accumulation/distribution zones.
+   - Smart Money Concepts (SMC): Automatically detects Order Blocks and Fair Value Gaps.
+
+--------------------------------------------------------------------------------
+TECHNICAL STACK & REQUIREMENTS
+--------------------------------------------------------------------------------
+
+Language: Python 3.10+
+Framework: Streamlit
+Data Source: yfinance (Yahoo Finance API)
+Visualization: Plotly, Matplotlib
+AI Engine: OpenAI API (gpt-4o)
+
+Required Libraries (requirements.txt):
+- streamlit
+- yfinance
+- plotly
+- pandas
+- numpy
+- scipy
+- openai>=1.0.0
+- requests
+- matplotlib
+- ccxt
+- anthropic
+- google-generativeai
+- xlsxwriter
+
+--------------------------------------------------------------------------------
+SETUP & CONFIGURATION
+--------------------------------------------------------------------------------
+
+1. API KEYS (Secrets Management):
+   The app automatically looks for keys in `.streamlit/secrets.toml`.
+   
+   Format for secrets.toml:
+   [OPENAI_API_KEY] = "sk-..."
+   [TELEGRAM_TOKEN] = "123456:ABC-..."
+   [TELEGRAM_CHAT_ID] = "-100..."
+
+   *Fallback:* If secrets are not found, the app provides sidebar input fields 
+   for manual entry.
+
+2. RUNNING THE APP:
+   Open your terminal/command prompt and run:
+   $ streamlit run Terminal-V1-2.py
+
+--------------------------------------------------------------------------------
+DISCLAIMER
+--------------------------------------------------------------------------------
+This tool is for informational and educational purposes only. It does not 
+constitute financial advice. Trading involves risk.
