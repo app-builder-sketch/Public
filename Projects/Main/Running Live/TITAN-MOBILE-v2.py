@@ -1,7 +1,4 @@
-"""
-TITAN INTRADAY PRO - MOBILE EDITION
-Version 18.1: Touch-Optimized Interface + Vertical AI Analysis Cards
-"""
+"
 import time
 import math
 import sqlite3
