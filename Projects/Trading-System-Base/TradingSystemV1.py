@@ -61,7 +61,7 @@ st.markdown("""
         margin-top: 10px; border-left: 3px solid #e040fb; font-family: 'Inter';
     }
     .mobile-prop { font-size: 0.75rem; color: #888; display: flex; justify-content: space-between; margin-bottom: 4px; }
-    .mobile-val { color: #fff; font-weight: bold; font-family: 'Rajdhani'; }
+    .mobile-val { color: #fff; font-weight: bold; font-family: 'Rajdhani'; text-align: right; }
 
     /* CONTROLS */
     .stTextInput>div>div>input, .stSelectbox>div>div>div { background-color: #0a0a0a; color: #fff; border: 1px solid #333; }
@@ -80,8 +80,9 @@ tg_token = st.secrets.get("TELEGRAM_TOKEN")
 tg_chat = st.secrets.get("TELEGRAM_CHAT_ID")
 
 # ==========================================
-# 2. MASTER DATASETS
+# 2. MASTER DATASETS & APP METADATA
 # ==========================================
+# INTEGRATED FROM: Terminal 1.0.zip/readme.txt & certification.txt
 APP_METADATA = {
     "Name": "Terminal",
     "Version": "1.0",
@@ -90,7 +91,9 @@ APP_METADATA = {
     "Key": "GyGZYiqBriidIkwvlPFWAFCsIxcygvlB",
     "Author": "My Company (UK)",
     "Keystore": "my-release-key.jks",
-    "Password": "O3mg1uFKVqnm" # From certification.txt
+    "Alias": "terminal",
+    "Password": "O3mg1uFKVqnm", # Extracted from certification.txt
+    "BuildDate": "2025-12-23"
 }
 
 ASSET_CLASSES = {
@@ -371,14 +374,19 @@ def main():
             st.markdown("""
             **1. BATTLE GRID (HUD)**
             * **STRUCTURE:** HMA Cloud Trend (Above = Bull, Below = Bear).
-            * **FLUX:** Institutional Volume Flow.
+            * **FLUX:** Institutional Volume Flow. 'Resistive' = Chop.
             * **ENTROPY:** Chaos Meter. >0.8 = Unpredictable.
             
             **2. PHYSICS LAB (BACKTEST)**
-            * Select **Titan Strategy** to test.
-            * **Flux:** Buys "Super Bull".
-            * **Entropy:** Buys Stability.
-            * **RQZO:** Buys Zero-Cross.
+            * Select **Titan Strategy** to test against history.
+            * **Flux:** Buys "Super Bull", Sells "Super Bear".
+            * **Entropy:** Buys Stability (Trend + Low Entropy).
+            * **RQZO:** Buys Zero-Cross (Momentum).
+            
+            **3. VISUALS**
+            * **Green/Red Boxes:** Order Blocks (Smart Money).
+            * **Blue Line:** RQZO Oscillator.
+            * **Purple Line:** Entropy (Risk).
             """)
         
         st.markdown("---")
@@ -393,6 +401,7 @@ def main():
                 <hr style="border-color:#333; margin:8px 0;">
                 <div class="mobile-prop"><span>Auth</span> <span class="mobile-val">{APP_METADATA['Author']}</span></div>
                 <div class="mobile-prop"><span>Key</span> <span class="mobile-val" style="font-size:0.6rem">...{APP_METADATA['Key'][-6:]}</span></div>
+                <div class="mobile-prop"><span>Pass</span> <span class="mobile-val" style="font-size:0.6rem; color:#e040fb">{APP_METADATA['Password']}</span></div>
             </div>
             """, unsafe_allow_html=True)
             st.button("📥 DOWNLOAD APK (v1.0)", use_container_width=True)
@@ -478,10 +487,9 @@ def main():
                         portfolio.execute_trade(sig, row, ticker)
                     portfolio.update_equity(row['Close'], row.name)
                 
-                # Metrics Calculation
-                metrics = PerformanceAnalyzer.calculate_metrics(portfolio, 10000.0)
-                
                 if portfolio.equity_curve:
+                    # Metrics Calculation
+                    metrics = PerformanceAnalyzer.calculate_metrics(portfolio, 10000.0)
                     c_m1, c_m2, c_m3 = st.columns(3)
                     c_m1.metric("TOTAL RETURN", f"{metrics.get('total_return', 0):.2f}%")
                     c_m2.metric("SHARPE RATIO", f"{metrics.get('sharpe', 0):.2f}")
