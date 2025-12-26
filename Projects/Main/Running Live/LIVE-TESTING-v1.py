@@ -1,3 +1,4 @@
+
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -8,18 +9,17 @@ import requests
 from openai import OpenAI
 import streamlit.components.v1 as components
 from datetime import datetime
-from scipy.stats import linregress
 from typing import Tuple, Dict, Any, Optional, List
 
 # ==========================================
-# 1. CONFIGURATION & SECRETS
+# 1. CONFIGURATION & ASSETS
 # ==========================================
 class AxiomConfig:
-    PAGE_TITLE = "Axiom Titan Terminal"
+    PAGE_TITLE = "Axiom Titan v3.2 (Production)"
     PAGE_ICON = "💠"
     LAYOUT = "wide"
     
-    # Combined Asset Universe
+    # Asset Universe
     ASSETS = {
         "Indices & Macro": ["SPY", "QQQ", "IWM", "TLT", "VXX", "^TNX", "DX-Y.NYB", "^VIX"],
         "Crypto (Major)": ["BTC-USD", "ETH-USD", "SOL-USD", "BNB-USD", "XRP-USD", "ADA-USD", "DOGE-USD"],
@@ -28,207 +28,133 @@ class AxiomConfig:
         "Commodities": ["GLD", "SLV", "USO", "CL=F", "GC=F", "NG=F", "HG=F"]
     }
 
+    # Visual Palette (Pine Script Match)
+    COLORS = {
+        'bull_trend': '#00695C', 'bear_trend': '#B71C1C',
+        'bull_sig': '#00E676', 'bear_sig': '#FF1744',
+        'smc_bull': 'rgba(185, 246, 202, 0.4)', # Pale Mint
+        'smc_bear': 'rgba(255, 205, 210, 0.4)',  # Pale Rose
+        'bos': '#FFFFFF', 'text': '#E0E0E0'
+    }
+
     @staticmethod
     def get_secret(key: str) -> str:
-        """
-        Auto-loads secrets from .streamlit/secrets.toml if available.
-        Returns empty string if not found, allowing manual override.
-       
-        """
-        try:
-            return st.secrets.get(key, "")
-        except:
-            return ""
+        try: return st.secrets.get(key, "")
+        except: return ""
 
 # ==========================================
-# 2. UX FACTORY (STYLING & COMPONENT)
+# 2. UX FACTORY
 # ==========================================
 class UXFactory:
     @staticmethod
     def inject_css(is_mobile: bool):
-        """Injects the "DarkPool/Neon" aesthetic CSS with Mobile responsiveness."""
         base_css = """
         <style>
             @import url('https://fonts.googleapis.com/css2?family=Roboto+Mono:wght@300;400;700&family=SF+Pro+Display:wght@300;500;700&display=swap');
             .stApp { background-color: #0e1117; color: #e0e0e0; font-family: 'SF Pro Display', monospace; }
-            
-            /* Title Glow */
-            .title-glow {
-                font-size: 2.5em; font-weight: bold; color: #ffffff;
-                text-shadow: 0 0 10px #00ff00, 0 0 20px #00ff00;
-                margin-bottom: 10px;
-            }
-
-            /* Metric Cards */
-            div[data-testid="stMetric"] {
-                background: rgba(255, 255, 255, 0.05);
-                border: 1px solid rgba(255, 255, 255, 0.1);
-                border-left: 3px solid #00ff00;
-                padding: 10px; border-radius: 4px;
-                transition: transform 0.2s;
-            }
-            div[data-testid="stMetric"]:hover { transform: scale(1.02); border-color: #00ff00; }
-            div[data-testid="stMetricValue"] { color: #fff; font-weight: 700; font-size: 1.4rem !important; }
-            div[data-testid="stMetricLabel"] { color: #8b949e; letter-spacing: 1px; font-size: 0.8rem; }
-
-            /* Mobile Specific */
-            .report-card {
-                background-color: #161b22;
-                border-left: 4px solid #00F0FF;
-                padding: 15px; border-radius: 6px;
-                margin-bottom: 10px; font-family: 'SF Pro Display', sans-serif;
-            }
+            .title-glow { font-size: 2.2em; font-weight: bold; color: #ffffff; text-shadow: 0 0 10px #00ff00; margin-bottom: 5px; }
+            div[data-testid="stMetric"] { background: rgba(255, 255, 255, 0.05); border-left: 3px solid #00ff00; padding: 10px; border-radius: 4px; }
+            div[data-testid="stMetricValue"] { color: #fff; font-weight: 700; font-size: 1.3rem !important; }
+            .report-card { background-color: #161b22; border-left: 4px solid #00F0FF; padding: 15px; border-radius: 6px; margin-bottom: 10px; font-family: 'SF Pro Display', sans-serif; }
             .report-header { font-size: 1.1rem; font-weight: bold; color: #fff; margin-bottom: 8px; border-bottom: 1px solid #333; padding-bottom: 5px; }
             .report-item { margin-bottom: 5px; font-size: 0.9rem; color: #aaa; }
             .highlight { color: #00F0FF; font-weight: bold; }
+            .ticker-wrap { width: 100%; overflow: hidden; background-color: #0d1117; border-bottom: 1px solid #30363d; height: 30px; display: flex; align-items: center; }
+            .ticker { display: inline-block; animation: marquee 60s linear infinite; white-space: nowrap; }
+            @keyframes marquee { 0% { transform: translate(100%, 0); } 100% { transform: translate(-100%, 0); } }
         </style>
         """
-        
-        mobile_css = """
-        <style>
-            div[data-testid="stMetric"] { margin-bottom: 8px; padding: 15px; }
-            .js-plotly-plot { height: 100% !important; } 
-            button { min-height: 50px !important; margin-top: 10px !important; }
-        </style>
-        """
-        
+        mobile_css = """<style>div[data-testid="stMetric"] { margin-bottom: 8px; padding: 15px; } .js-plotly-plot { height: 100% !important; } button { min-height: 50px !important; margin-top: 10px !important; }</style>"""
         st.markdown(base_css, unsafe_allow_html=True)
-        if is_mobile:
-            st.markdown(mobile_css, unsafe_allow_html=True)
+        if is_mobile: st.markdown(mobile_css, unsafe_allow_html=True)
 
     @staticmethod
-    def render_header():
-        """Renders the Title and Ticker Tape."""
-        st.markdown('<div class="title-glow">👁️ Axiom Titan Terminal</div>', unsafe_allow_html=True)
-        
-        # Ticker Tape Implementation
-        st.markdown("""
-        <div class="ticker-wrap" style="width: 100%; overflow: hidden; background-color: #0d1117; border-bottom: 1px solid #30363d; height: 30px; display: flex; align-items: center;">
-            <div class="ticker" style="display: inline-block; animation: marquee 60s linear infinite; white-space: nowrap;">
-                <span style="padding:0 2rem; color:#00ff00; font-family:'Roboto Mono';">SYSTEM: ONLINE</span>
-                <span style="padding:0 2rem; color:#00ff00; font-family:'Roboto Mono';">PHYSICS ENGINE: ACTIVE</span>
-                <span style="padding:0 2rem; color:#00ff00; font-family:'Roboto Mono';">GOD MODE: ENABLED</span>
-                <span style="padding:0 2rem; color:#00ff00; font-family:'Roboto Mono';">AI ANALYST: STANDBY</span>
-            </div>
-        </div>
-        <style>@keyframes marquee { 0% { transform: translate(100%, 0); } 100% { transform: translate(-100%, 0); } }</style>
+    def render_header(asset_class: str):
+        items = "BITCOIN: ACTIVE • ETH: ACTIVE • SOL: VOLATILE" if "Crypto" in asset_class else "SPY: LIQUID • VIX: WATCH • YIELDS: STABLE"
+        st.markdown(f"""
+        <div class="title-glow">👁️ Axiom Titan v3.2</div>
+        <div class="ticker-wrap"><div class="ticker">
+            <span style="padding:0 2rem; color:#00ff00;">SYSTEM: ONLINE</span>
+            <span style="padding:0 2rem; color:#00ff00;">PHYSICS: CALCULATING</span>
+            <span style="padding:0 2rem; color:#00F0FF;">{items}</span>
+        </div></div>
         """, unsafe_allow_html=True)
 
+    @staticmethod
+    def render_world_clock():
+        html = """
+        <div style="display: flex; gap: 20px; font-family: 'Roboto Mono'; color: #888; font-size: 0.8rem; background: rgba(0,0,0,0.2); padding: 5px;">
+            <div>NYC <span id="nyc" style="color: #fff;">--:--</span></div>
+            <div>LON <span id="lon" style="color: #fff;">--:--</span></div>
+            <div>TOK <span id="tok" style="color: #fff;">--:--</span></div>
+        </div>
+        <script>
+        function u(){ const d=new Date(); const f=(t)=>d.toLocaleTimeString('en-US',{timeZone:t,hour:'2-digit',minute:'2-digit',hour12:false}); 
+        document.getElementById('nyc').innerText=f('America/New_York'); document.getElementById('lon').innerText=f('Europe/London'); document.getElementById('tok').innerText=f('Asia/Tokyo'); }
+        setInterval(u,1000); u();
+        </script>
+        """
+        components.html(html, height=40)
+
+    @staticmethod
+    def render_tradingview_widget(ticker: str, interval: str):
+        tv_int = "240" if interval == "4h" else ("60" if interval == "1h" else "D")
+        tv_sym = ticker.replace("-", "").replace("=X", "")
+        if "BTC" in tv_sym: tv_sym = "BINANCE:BTCUSDT"
+        elif "SPY" in tv_sym: tv_sym = "AMEX:SPY"
+        
+        html = f"""
+        <div class="tradingview-widget-container"><div id="tradingview_widget"></div>
+        <script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script>
+        <script type="text/javascript">
+        new TradingView.widget({{"width": "100%", "height": 550, "symbol": "{tv_sym}", "interval": "{tv_int}", "theme": "dark", "style": "1", "container_id": "tradingview_widget"}});
+        </script></div>
+        """
+        components.html(html, height=550)
+
 # ==========================================
-# 3. DATA CORE (ROBUST UPGRADE)
+# 3. DATA CORE
 # ==========================================
 class DataCore:
     @staticmethod
     @st.cache_data(ttl=300)
     def fetch_data(ticker: str, timeframe: str, limit: int = 500) -> pd.DataFrame:
-        """
-        Robust data fetching with Smart Fallback logic.
-        If the requested period fails, it retries with a shorter period.
-       
-        """
-        # Primary Map: The ideal period we WANT
-        primary_tf_map = {
-            "15m": "60d",  # Max 60 days for 15m
-            "1h": "730d",  # Max 730 days for 1h
-            "4h": "730d",  # Derived from 1h
-            "1d": "5y",
-            "1wk": "10y"
-        }
-        
-        # Fallback Map: A safe period we accept if Primary fails
-        fallback_tf_map = {
-            "15m": "5d",
-            "1h": "60d", 
-            "4h": "60d", 
-            "1d": "1y",
-            "1wk": "2y"
-        }
-
-        period = primary_tf_map.get(timeframe, "1y")
-        dl_interval = "1h" if timeframe == "4h" else timeframe
+        tf_map = {"15m": "60d", "1h": "730d", "4h": "730d", "1d": "5y"}
+        fallback_map = {"15m": "5d", "1h": "60d", "4h": "60d", "1d": "1y"}
         
         try:
-            # ATTEMPT 1: Primary Request
-            df = yf.download(ticker, period=period, interval=dl_interval, progress=False, threads=False)
-            
-            # ATTEMPT 2: Fallback Request (if empty)
+            df = yf.download(ticker, period=tf_map.get(timeframe, "1y"), interval="1h" if timeframe=="4h" else timeframe, progress=False, threads=False)
             if df.empty:
-                safe_period = fallback_tf_map.get(timeframe, "1mo")
-                st.warning(f"⚠️ Primary data stream unavailable. Retrying with backup period ({safe_period})...")
-                df = yf.download(ticker, period=safe_period, interval=dl_interval, progress=False, threads=False)
-
-            if df.empty: 
-                st.error(f"❌ Failed to fetch data for {ticker} ({timeframe}). Yahoo Finance may be rate-limiting.")
-                return pd.DataFrame()
+                df = yf.download(ticker, period=fallback_map.get(timeframe, "1mo"), interval="1h" if timeframe=="4h" else timeframe, progress=False, threads=False)
             
-            # MultiIndex Handling (Critical for yfinance v0.2+)
-            if isinstance(df.columns, pd.MultiIndex):
-                try: df = df.xs(ticker, axis=1, level=0)
-                except: df.columns = df.columns.get_level_values(0)
-            
-            # Standardization
-            cols = {c: c.capitalize() for c in df.columns}
-            df = df.rename(columns=cols)
+            if isinstance(df.columns, pd.MultiIndex): df = df.xs(ticker, axis=1, level=0) if ticker in df.columns else df
+            df.columns = [c.capitalize() for c in df.columns]
             if 'Adj close' in df.columns: df['Close'] = df['Adj close']
             
-            # Resample for 4h (Aggregating 1h data)
             if timeframe == "4h":
-                # Ensure index is Datetime
-                df.index = pd.to_datetime(df.index)
-                agg_dict = {
-                    'Open': 'first', 'High': 'max', 'Low': 'min', 'Close': 'last', 'Volume': 'sum'
-                }
-                # Only aggregate columns that actually exist
-                agg_dict = {k: v for k, v in agg_dict.items() if k in df.columns}
-                df = df.resample('4h').agg(agg_dict).dropna()
-
+                df = df.resample('4h').agg({'Open':'first','High':'max','Low':'min','Close':'last','Volume':'sum'}).dropna()
+            
             return df.tail(limit)
-        
         except Exception as e:
-            st.error(f"Data Core Critical Error: {str(e)}")
-            return pd.DataFrame()
-
-    @staticmethod
-    @st.cache_data(ttl=3600)
-    def get_fundamentals(ticker: str) -> Optional[Dict]:
-        """Fetches fundamentals safely."""
-        # Skip fundamentals for crypto/forex to prevent errors
-        if any(x in ticker for x in ["-", "=", "^"]): return None 
-        try:
-            stock = yf.Ticker(ticker)
-            info = stock.info
-            return {
-                "Market Cap": info.get("marketCap", "N/A"),
-                "P/E": info.get("trailingPE", "N/A"),
-                "Growth": info.get("revenueGrowth", 0),
-                "Summary": info.get("longBusinessSummary", "No Data")
-            }
-        except: return None
+            st.error(f"Data Error: {e}"); return pd.DataFrame()
 
     @staticmethod
     @st.cache_data(ttl=300)
     def get_macro_data():
-        """Batch fetches global macro indicators."""
-        assets = {"S&P 500": "SPY", "Bitcoin": "BTC-USD", "10Y Yield": "^TNX", "VIX": "^VIX", "DXY": "DX-Y.NYB", "Gold": "GC=F"}
+        assets = {"S&P 500": "SPY", "VIX": "^VIX", "DXY": "DX-Y.NYB"}
         try:
-            data = yf.download(list(assets.values()), period="5d", interval="1d", progress=False, threads=False)['Close']
-            # Fallback for single-column result if only 1 asset returns
-            if isinstance(data, pd.Series): return {}, {}
-            
-            prices = {k: data[v].iloc[-1] for k,v in assets.items() if v in data.columns}
-            changes = {k: ((data[v].iloc[-1]-data[v].iloc[-2])/data[v].iloc[-2])*100 for k,v in assets.items() if v in data.columns}
-            return prices, changes
-        except: return {}, {}
+            data = yf.download(list(assets.values()), period="5d", progress=False)['Close']
+            prices = {k: data[v].iloc[-1] for k,v in assets.items() if v in data}
+            return prices
+        except: return {}
+
 # ==========================================
-# 4. QUANT ENGINE (FIXED)
+# 4. QUANT ENGINE (PHYSICS + SMC)
 # ==========================================
 class QuantEngine:
-    
     @staticmethod
-    def tanh(x): 
-        return np.tanh(np.clip(x, -20, 20))
+    def tanh(x): return np.tanh(np.clip(x, -20, 20))
 
-    # --- HELPER FUNCTIONS ---
     @staticmethod
     def calculate_wma(series, length):
         weights = np.arange(1, length + 1)
@@ -236,342 +162,258 @@ class QuantEngine:
 
     @staticmethod
     def calculate_hma(series, length):
-        half_length = int(length / 2)
-        sqrt_length = int(np.sqrt(length))
-        wma_half = QuantEngine.calculate_wma(series, half_length)
-        wma_full = QuantEngine.calculate_wma(series, length)
-        diff = 2 * wma_half - wma_full
-        return QuantEngine.calculate_wma(diff, sqrt_length)
+        half = int(length / 2)
+        sqrt = int(np.sqrt(length))
+        wma_f = QuantEngine.calculate_wma(series, length)
+        wma_h = QuantEngine.calculate_wma(series, half)
+        return QuantEngine.calculate_wma(2 * wma_h - wma_f, sqrt)
 
     @staticmethod
     def calculate_atr(df, length=14):
-        high_low = df['High'] - df['Low']
-        high_close = np.abs(df['High'] - df['Close'].shift())
-        low_close = np.abs(df['Low'] - df['Close'].shift())
-        tr = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
+        h, l, c = df['High'], df['Low'], df['Close']
+        tr = pd.concat([h-l, (h-c.shift()).abs(), (l-c.shift()).abs()], axis=1).max(axis=1)
         return tr.rolling(length).mean()
 
-    # --- PHYSICS INDICATORS (AXIOM) ---
+    # --- PHYSICS (ENTROPY & FLUX) ---
     @staticmethod
-    def calc_chedo(df: pd.DataFrame, length: int = 50) -> pd.DataFrame:
-        """Calculates CHEDO (Chaos/Entropy Dynamics)."""
+    def calc_physics(df: pd.DataFrame) -> pd.DataFrame:
         c = df['Close'].values
-        # Log Returns
         log_ret = np.diff(np.log(c), prepend=np.log(c[0]))
-        
-        # Volatility & Hyperbolic Distance
-        mu = pd.Series(log_ret).rolling(length).mean().values
-        sigma = pd.Series(log_ret).rolling(length).std().values
-        v = sigma / (np.abs(mu) + 1e-9)
-        abs_ret_v = np.abs(log_ret) * v
-        hyper_dist = np.log(abs_ret_v + np.sqrt(abs_ret_v**2 + 1))
-        
-        # Kappa (Curvature)
-        kappa_h = QuantEngine.tanh(pd.Series(hyper_dist).rolling(length).mean().values)
-        
-        # Lyapunov Proxy
-        diff_ret = np.diff(log_ret, prepend=0)
-        lyap = np.log(np.abs(diff_ret) + 1e-9)
-        lambda_n = QuantEngine.tanh((pd.Series(lyap).rolling(length).mean().values + 5) / 7)
-        
-        # Entropy
-        ent = pd.Series(log_ret**2).rolling(length).sum().values
+        ent = pd.Series(log_ret**2).rolling(50).sum().values
         ent_n = QuantEngine.tanh(ent * 10)
+        df['CHEDO'] = 2 / (1 + np.exp(-ent_n * 4)) - 1
         
-        # Synthesis
-        raw = (0.4 * kappa_h) + (0.3 * lambda_n) + (0.3 * ent_n)
-        
-        # Assign directly as numpy array to avoid index issues
-        df['CHEDO'] = 2 / (1 + np.exp(-raw * 4)) - 1
-        return df
-
-    @staticmethod
-    def calc_rqzo(df: pd.DataFrame, harmonics: int = 25) -> pd.DataFrame:
-        """Calculates RQZO (Relativistic Quantum Oscillator)."""
-        src = df['Close']
-        mn, mx = src.rolling(100).min(), src.rolling(100).max()
-        # Ensure numpy division to avoid index friction
-        norm = (src - mn) / (mx - mn + 1e-9)
-        
-        v = np.abs(norm.diff())
-        c_limit = 0.05
-        # FillNa(1.0) on gamma to treat missing initial data as 'normal time'
-        gamma_series = 1 / np.sqrt(1 - (np.minimum(v, c_limit*0.99)/c_limit)**2)
-        gamma = gamma_series.fillna(1.0).values
-        
-        idx = np.arange(len(df))
-        tau = (idx % 100) / gamma
-        zeta = np.zeros(len(df))
-        
-        for n in range(1, harmonics + 1):
-            amp = n ** -0.5
-            theta = tau * np.log(n)
-            zeta += amp * np.sin(theta)
-            
-        # FIX: Assign numpy array directly so Pandas infers alignment by order
-        df['RQZO'] = zeta
-        return df
-
-    @staticmethod
-    def calc_apex_flux(df: pd.DataFrame, length: int = 14) -> pd.DataFrame:
-        """Calculates Apex Flux (Vector Efficiency)."""
         rg = df['High'] - df['Low']
-        body = np.abs(df['Close'] - df['Open'])
-        
-        # Calculate raw efficiency (numpy array)
-        eff_raw = np.where(rg == 0, 0, body / rg)
-        
-        # FIX: Create Series with df.index explicitly to allow alignment
-        eff_sm = pd.Series(eff_raw, index=df.index).ewm(span=length).mean()
-        
-        vol_avg = df['Volume'].rolling(55).mean()
-        # numpy array
-        v_rat = np.where(vol_avg == 0, 1, df['Volume'] / vol_avg)
-        
-        # Pandas Series (DatetimeIndex)
-        direction = np.sign(df['Close'] - df['Open'])
-        
-        # Now all components align: 
-        # direction (Series w/ DateIndex) * eff_sm (Series w/ DateIndex) * v_rat (Broadcasted Array)
-        raw = direction * eff_sm * v_rat
-        
-        df['Apex_Flux'] = pd.Series(raw).ewm(span=5).mean()
+        body = (df['Close'] - df['Open']).abs()
+        eff = np.where(rg==0, 0, body/rg)
+        df['Apex_Flux'] = pd.Series(np.sign(df['Close']-df['Open']) * eff).ewm(span=5).mean()
         return df
 
-    # --- GOD MODE INDICATORS ---
+    # --- SMC & STRATEGY ENGINE ---
     @staticmethod
-    def calc_god_mode(df: pd.DataFrame) -> pd.DataFrame:
-        # 1. HMA Trend
-        df['HMA_55'] = QuantEngine.calculate_hma(df['Close'], 55)
-        df['ATR'] = QuantEngine.calculate_atr(df, 14)
-        
-        # 2. Apex Trend (Cloud)
+    def calc_apex_smc_strategy(df: pd.DataFrame) -> Tuple[pd.DataFrame, Dict]:
+        """
+        Integrates Trend (HMA), Momentum (WaveTrend), and Market Structure (SMC).
+        """
+        # 1. Trend & Volatility
+        df['HMA_Trend'] = QuantEngine.calculate_hma(df['Close'], 55)
+        df['ATR'] = QuantEngine.calculate_atr(df, 55)
         mult = 1.5
-        df['Apex_Upper'] = df['HMA_55'] + (QuantEngine.calculate_atr(df, 55) * mult)
-        df['Apex_Lower'] = df['HMA_55'] - (QuantEngine.calculate_atr(df, 55) * mult)
-        df['Apex_Trend'] = np.where(df['Close'] > df['Apex_Upper'], 1, np.where(df['Close'] < df['Apex_Lower'], -1, 0))
-        df['Apex_Trend'] = df['Apex_Trend'].replace(0, method='ffill')
-
-        # 3. Squeeze Momentum
-        basis = df['Close'].rolling(20).mean()
-        dev = df['Close'].rolling(20).std() * 2.0
-        upper_bb = basis + dev
-        lower_bb = basis - dev
+        df['Trend_Upper'] = df['HMA_Trend'] + (df['ATR'] * mult)
+        df['Trend_Lower'] = df['HMA_Trend'] - (df['ATR'] * mult)
         
-        ma_kc = df['Close'].rolling(20).mean()
-        range_ma = QuantEngine.calculate_atr(df, 20)
-        upper_kc = ma_kc + (range_ma * 1.5)
-        lower_kc = ma_kc - (range_ma * 1.5)
+        # Trend State
+        df['Trend'] = np.where(df['Close'] > df['Trend_Upper'], 1, np.where(df['Close'] < df['Trend_Lower'], -1, 0))
+        df['Trend'] = df['Trend'].replace(0, method='ffill')
+
+        # Momentum: ADX & WaveTrend
+        up = df['High'] - df['High'].shift(1)
+        down = df['Low'].shift(1) - df['Low']
+        pos_dm = np.where((up > down) & (up > 0), up, 0)
+        neg_dm = np.where((down > up) & (down > 0), down, 0)
+        tr = QuantEngine.calculate_atr(df, 14)
+        di_plus = 100 * pd.Series(pos_dm).ewm(alpha=1/14).mean() / tr
+        di_minus = 100 * pd.Series(neg_dm).ewm(alpha=1/14).mean() / tr
+        dx = 100 * np.abs(di_plus - di_minus) / (di_plus + di_minus)
+        df['ADX'] = dx.ewm(alpha=1/14).mean()
+
+        # WaveTrend
+        ap = (df['High'] + df['Low'] + df['Close']) / 3
+        esa = ap.ewm(span=10).mean()
+        d = (ap - esa).abs().ewm(span=10).mean()
+        ci = (ap - esa) / (0.015 * d)
+        tci = ci.ewm(span=21).mean()
+        df['WaveTrend'] = tci
         
-        df['Squeeze_On'] = (lower_bb > lower_kc) & (upper_bb < upper_kc)
+        # Signals
+        df['Vol_Avg'] = df['Volume'].rolling(20).mean()
+        df['Sig_Buy'] = (df['Trend'] == 1) & (df['Trend'].shift(1) != 1) & (df['Volume'] > df['Vol_Avg']) & (tci < 60) & (df['ADX'] > 20)
+        df['Sig_Sell'] = (df['Trend'] == -1) & (df['Trend'].shift(1) != -1) & (df['Volume'] > df['Vol_Avg']) & (tci > -60) & (df['ADX'] > 20)
+
+        # 2. SMC Structure (Pivots, BOS, FVG, OB)
+        smc_data = {'bos': [], 'ob': [], 'fvg': []}
         
-        # Momentum (LinReg Slope)
-        def get_slope(series):
-            y = series.values
-            x = np.arange(len(y))
-            if len(y) < 20: return 0
-            slope, _, _, _, _ = linregress(x, y)
-            return slope
-
-        # Efficient Rolling Slope
-        delta = df['Close'] - ((df['High'].rolling(20).max() + df['Low'].rolling(20).min())/2 + ma_kc)/2
-        df['Sqz_Mom'] = delta.rolling(20).apply(get_slope, raw=False) * 100
-
-        # 4. Money Flow Matrix
-        rsi_src = (100 - (100 / (1 + (df['Close'].diff().clip(lower=0).rolling(14).mean() / df['Close'].diff().clip(upper=0).abs().rolling(14).mean())))) - 50
-        mf_vol = df['Volume'] / df['Volume'].rolling(14).mean()
-        df['MF_Matrix'] = (rsi_src * mf_vol).ewm(span=3).mean()
-
-        # 5. God Mode Score
-        df['GM_Score'] = (
-            df['Apex_Trend'] + 
-            np.sign(df['Sqz_Mom']) + 
-            np.sign(df['Apex_Flux'])
-        )
-        return df
-
-    @staticmethod
-    def calc_smc(df: pd.DataFrame) -> Dict:
-        """Smart Money Concepts (Structures)."""
-        smc = {'structures': []}
-        swing = 5
-        df['PH'] = df['High'].rolling(swing*2+1, center=True).max() == df['High']
-        df['PL'] = df['Low'].rolling(swing*2+1, center=True).min() == df['Low']
+        # Pivot High/Low
+        piv_len = 5
+        df['Pivot_High'] = df['High'].rolling(window=piv_len*2+1, center=True).max() == df['High']
+        df['Pivot_Low'] = df['Low'].rolling(window=piv_len*2+1, center=True).min() == df['Low']
         
-        last_h = None
-        last_l = None
-        for i in range(swing, len(df)):
-            if df['PH'].iloc[i]:
-                if last_h: smc['structures'].append({'x0':last_h[0], 'y':last_h[1], 'x1':df.index[i], 'color':'red', 'type':'RES'})
-                last_h = (df.index[i], df['High'].iloc[i])
-            if df['PL'].iloc[i]:
-                if last_l: smc['structures'].append({'x0':last_l[0], 'y':last_l[1], 'x1':df.index[i], 'color':'green', 'type':'SUP'})
-                last_l = (df.index[i], df['Low'].iloc[i])
-        return smc
+        last_ph = None
+        last_pl = None
+        
+        # BOS Logic
+        for i in range(max(0, len(df)-200), len(df)):
+            curr_close = df['Close'].iloc[i]
+            curr_trend = df['Trend'].iloc[i]
+            
+            pivot_idx = i - piv_len
+            if pivot_idx >= 0:
+                if df['Pivot_High'].iloc[pivot_idx]: last_ph = df['High'].iloc[pivot_idx]
+                if df['Pivot_Low'].iloc[pivot_idx]: last_pl = df['Low'].iloc[pivot_idx]
 
-    @staticmethod
-    def run_monte_carlo(df: pd.DataFrame, days: int = 30, sims: int = 100) -> np.ndarray:
-        last = df['Close'].iloc[-1]
-        rets = df['Close'].pct_change().dropna()
-        if rets.empty: return np.zeros((days, sims))
-        mu, sigma = rets.mean(), rets.std()
-        sim_rets = np.random.normal(mu, sigma, (days, sims))
-        paths = np.zeros((days, sims))
-        paths[0] = last
-        for t in range(1, days): paths[t] = paths[t-1] * (1 + sim_rets[t])
-        return paths
+            # Break of Structure
+            if curr_trend == 1 and last_ph and curr_close > last_ph:
+                if not smc_data['bos'] or (i - smc_data['bos'][-1]['idx'] > 5):
+                    smc_data['bos'].append({'idx': i, 'price': last_ph, 'type': 'bull', 'date': df.index[i]})
+                    last_ph = None 
 
-    @staticmethod
-    def calc_volume_profile(df: pd.DataFrame, bins: int = 50):
-        price_bins = np.linspace(df['Low'].min(), df['High'].max(), bins)
-        df['Bin'] = pd.cut(df['Close'], bins=price_bins, include_lowest=True)
-        vp = df.groupby('Bin', observed=False)['Volume'].sum().reset_index()
-        vp['Price'] = [i.mid for i in vp['Bin']]
-        poc_price = vp.loc[vp['Volume'].idxmax(), 'Price']
-        return vp, poc_price
+            if curr_trend == -1 and last_pl and curr_close < last_pl:
+                if not smc_data['bos'] or (i - smc_data['bos'][-1]['idx'] > 5):
+                    smc_data['bos'].append({'idx': i, 'price': last_pl, 'type': 'bear', 'date': df.index[i]})
+                    last_pl = None
+
+        # FVG & Order Blocks
+        fvg_bull = (df['Low'] > df['High'].shift(2)) & (df['Close'] > df['Open'])
+        fvg_bear = (df['High'] < df['Low'].shift(2)) & (df['Close'] < df['Open'])
+        
+        swing_lookback = 10
+        for i in range(len(df)-100, len(df)):
+            if i < 2: continue
+            # FVG
+            if fvg_bull.iloc[i]:
+                smc_data['fvg'].append({'type': 'bull', 'top': df['Low'].iloc[i], 'bottom': df['High'].iloc[i-2], 'x0': df.index[i-2], 'x1': df.index[i]})
+            if fvg_bear.iloc[i]:
+                smc_data['fvg'].append({'type': 'bear', 'top': df['Low'].iloc[i-2], 'bottom': df['High'].iloc[i], 'x0': df.index[i-2], 'x1': df.index[i]})
+            
+            # Order Blocks (Impulse Origin)
+            if df['Sig_Buy'].iloc[i]:
+                subset = df.iloc[i-swing_lookback:i]
+                reds = subset[subset['Close'] < subset['Open']]
+                if not reds.empty:
+                    ob = reds.iloc[-1]
+                    smc_data['ob'].append({'type': 'bull', 'top': ob['High'], 'bottom': ob['Low'], 'x': ob.name})
+            
+            if df['Sig_Sell'].iloc[i]:
+                subset = df.iloc[i-swing_lookback:i]
+                greens = subset[subset['Close'] > subset['Open']]
+                if not greens.empty:
+                    ob = greens.iloc[-1]
+                    smc_data['ob'].append({'type': 'bear', 'top': ob['High'], 'bottom': ob['Low'], 'x': ob.name})
+
+        return df, smc_data
 
 # ==========================================
-# 5. INTELLIGENCE (AI & TELEGRAM)
+# 5. INTELLIGENCE (REPORTING & BROADCAST)
 # ==========================================
 class Intelligence:
     @staticmethod
-    def analyze_ai(df: pd.DataFrame, ticker: str, api_key: str) -> str:
-        """God Mode AI Analyst."""
-        if not api_key: return "⚠️ Missing OpenAI API Key."
-        
+    def generate_quick_signal(df: pd.DataFrame, ticker: str) -> str:
         last = df.iloc[-1]
-        gm_verdict = "STRONG BUY" if last['GM_Score'] >= 2 else "STRONG SELL" if last['GM_Score'] <= -2 else "NEUTRAL"
-        
-        system_prompt = """
-        You are 'Axiom', a Tier-1 Quantitative Analyst. Analyze using FIRST PRINCIPLES.
-        
-        --- INDICATOR LEGEND ---
-        1. CHEDO (Entropy): >0.8 = Max Chaos (Mean Reversion Risk).
-        2. RQZO (Relativity): High Amp = Time Dilation/Instability.
-        3. Apex Flux (Vector): >0.6 = Superconductor (Trend Efficiency).
-        4. God Mode Score: Aggregate trend signal (-3 to +3).
-        
-        --- MISSION ---
-        Provide a concise, high-level overview.
-        1. Analyze Market Structure (Trend vs Chop).
-        2. Correlate Physics (Entropy) with Technicals (Squeeze).
-        3. Provide Outlook (Bull/Bear/Neutral).
-        
-        Use emojis (🚀, 📉, ⚛️) liberally. No specific financial advice.
-        """
-        
-        user_prompt = f"""
-        Asset: {ticker} | Price: {last['Close']:.2f}
-        Titan Score: {last['GM_Score']} ({gm_verdict})
-        Trend: {'Bullish' if last['Apex_Trend']==1 else 'Bearish'}
-        Entropy (CHEDO): {last['CHEDO']:.3f}
-        Relativity (RQZO): {last['RQZO']:.3f}
-        Flux: {last['Apex_Flux']:.3f}
-        Squeeze: {'ON' if last['Squeeze_On'] else 'OFF'}
-        """
-        
-        try:
-            client = OpenAI(api_key=api_key)
-            res = client.chat.completions.create(
-                model="gpt-4o",
-                messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}],
-                max_tokens=400
-            )
-            return res.choices[0].message.content
-        except Exception as e: return f"AI Error: {e}"
+        action = "LONG 🟢" if last['Trend'] == 1 else "SHORT 🔴"
+        return f"""⚡ QUICK SIGNAL: {ticker}
+Action: {action}
+Price: {last['Close']:.2f}
+Trend (HMA): {last['HMA_Trend']:.2f}
+Flux: {last['Apex_Flux']:.2f}
+WaveTrend: {last['WaveTrend']:.1f}
+Timestamp: {datetime.now().strftime('%H:%M UTC')}"""
 
     @staticmethod
-    def generate_mobile_card(last: pd.Series, ticker: str) -> str:
-        """HTML Card for Mobile."""
-        direction = "LONG 🐂" if last['Apex_Trend'] == 1 else "SHORT 🐻"
-        stop = last['HMA_55']
+    def generate_signal_report(df: pd.DataFrame, ticker: str, smc: Dict) -> str:
+        last = df.iloc[-1]
+        trend_str = "BULLISH" if last['Trend'] == 1 else "BEARISH"
         
-        return f"""
-        <div class="report-card">
-            <div class="report-header">💠 AXIOM SIGNAL: {direction}</div>
-            <div class="report-item">Asset: <span class="highlight">{ticker}</span></div>
-            <div class="report-item">GM Score: <span class="highlight">{last['GM_Score']:.0f} / 3</span></div>
-        </div>
-        <div class="report-card">
-            <div class="report-header">⚛️ PHYSICS DATA</div>
-            <div class="report-item">Entropy: <span class="highlight">{last['CHEDO']:.2f}</span></div>
-            <div class="report-item">Flux: <span class="highlight">{last['Apex_Flux']:.2f}</span></div>
-            <div class="report-item">Squeeze: <span class="highlight">{'ACTIVE' if last['Squeeze_On'] else 'OFF'}</span></div>
-        </div>
-        <div class="report-card">
-            <div class="report-header">🎯 LEVELS</div>
-            <div class="report-item">Price: <span class="highlight">{last['Close']:.2f}</span></div>
-            <div class="report-item">Base (Stop): <span class="highlight">{stop:.2f}</span></div>
-        </div>
-        """
+        last_bos = smc['bos'][-1] if smc['bos'] else None
+        bos_str = f"{last_bos['type'].upper()} at {last_bos['price']:.2f}" if last_bos else "None"
+
+        curr_price = last['Close']
+        nearest_fvg = "None"
+        min_dist = float('inf')
+        for f in smc['fvg'][-5:]:
+            mid = (f['top'] + f['bottom']) / 2
+            dist = abs(curr_price - mid)
+            if dist < min_dist:
+                min_dist = dist
+                nearest_fvg = f"{f['type'].upper()} ({f['bottom']:.2f} - {f['top']:.2f})"
+
+        return f"""📄 ARCHITECT STRATEGIC REPORT: {ticker}
+━━━━━━━━━━━━━━━━━━━━━━
+🎯 STRATEGY: APEX SMC v3.2
+━━━━━━━━━━━━━━━━━━━━━━
+🔹 STRUCTURE ANALYSIS
+• Trend State: {trend_str}
+• Last BOS: {bos_str}
+• Nearest FVG: {nearest_fvg}
+• Key Pivot: {last['HMA_Trend']:.2f}
+
+🔹 PHYSICS ENGINE
+• Entropy (CHEDO): {last['CHEDO']:.2f}
+• Vector Flux: {last['Apex_Flux']:.2f}
+• WaveTrend: {last['WaveTrend']:.1f}
+
+🔹 EXECUTION PARAMETERS
+• Current Price: {last['Close']:.2f}
+• Stop Loss Ref: {(last['Close'] - 2*last['ATR']):.2f} (L) / {(last['Close'] + 2*last['ATR']):.2f} (S)
+• Volatility (ATR): {last['ATR']:.2f}
+
+━━━━━━━━━━━━━━━━━━━━━━
+Generated by Axiom Titan Terminal"""
 
     @staticmethod
     def broadcast(message: str, token: str, chat: str):
-        """
-        Telegram Broadcast with message chunking.
-        Handles API limits by splitting long reports.
-       
-        """
-        if not token or not chat: return False, "Missing Credentials"
+        if not token or not chat: return False, "Missing Telegram Credentials"
         url = f"https://api.telegram.org/bot{token}/sendMessage"
         try:
-            max_len = 4000
+            # Robust Chunking for Long Reports
+            max_len = 3000
             if len(message) <= max_len:
-                requests.post(url, json={"chat_id": chat, "text": message, "parse_mode": "Markdown"})
+                requests.post(url, json={"chat_id": chat, "text": message})
             else:
                 for i in range(0, len(message), max_len):
-                    requests.post(url, json={"chat_id": chat, "text": message[i:i+max_len], "parse_mode": "Markdown"})
-            return True, "Sent"
+                    chunk = message[i:i+max_len]
+                    requests.post(url, json={"chat_id": chat, "text": f"(Part {i//max_len + 1}) {chunk}"})
+            return True, "Broadcast Sent Successfully"
         except Exception as e: return False, str(e)
 
 # ==========================================
-# 6. DASHBOARD (CHARTS)
+# 6. DASHBOARD
 # ==========================================
 class Dashboard:
     @staticmethod
-    def render_physics_charts(df: pd.DataFrame, smc: Dict, is_mobile: bool):
-        """God Mode + Physics Subplots."""
-        
-        # Dynamic Row Heights for Mobile vs Desktop
-        if is_mobile:
-            row_heights = [0.4, 0.15, 0.15, 0.15, 0.15]
-            total_h = 1000
-        else:
-            row_heights = [0.4, 0.15, 0.15, 0.15, 0.15]
-            total_h = 900
-            
-        fig = make_subplots(
-            rows=5, cols=1, shared_xaxes=True, vertical_spacing=0.03, row_heights=row_heights,
-            subplot_titles=("Price & Apex Cloud", "Squeeze Momentum", "Money Flow Matrix", "CHEDO (Entropy)", "Apex Flux")
-        )
+    def render_charts(df: pd.DataFrame, smc: Dict, is_mobile: bool):
+        row_heights = [0.5, 0.15, 0.15, 0.2]
+        fig = make_subplots(rows=4, cols=1, shared_xaxes=True, row_heights=row_heights, subplot_titles=("Price & SMC Structure", "Entropy (CHEDO)", "WaveTrend Momentum", "Apex Flux"))
 
-        # 1. Price + Apex Cloud + SMC
+        # 1. Price Pane
         fig.add_trace(go.Candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'], name="Price"), row=1, col=1)
-        fig.add_trace(go.Scatter(x=df.index, y=df['Apex_Upper'], line=dict(width=0), showlegend=False), row=1, col=1)
-        fig.add_trace(go.Scatter(x=df.index, y=df['Apex_Lower'], fill='tonexty', fillcolor='rgba(0, 255, 0, 0.05)', line=dict(width=0), name="Apex Cloud"), row=1, col=1)
-        fig.add_trace(go.Scatter(x=df.index, y=df['HMA_55'], line=dict(color='white', width=1, dash='dot'), name="HMA 55"), row=1, col=1)
         
-        # SMC Lines
-        for s in smc['structures']:
-            fig.add_shape(type="line", x0=s['x0'], x1=s['x1'], y0=s['y'], y1=s['y'], line=dict(color=s['color'], width=1, dash="dot"), row=1, col=1)
+        # Cloud
+        fig.add_trace(go.Scatter(x=df.index, y=df['Trend_Upper'], line=dict(width=0), showlegend=False), row=1, col=1)
+        fig.add_trace(go.Scatter(x=df.index, y=df['Trend_Lower'], fill='tonexty', fillcolor='rgba(0, 105, 92, 0.1)' if df['Trend'].iloc[-1]==1 else 'rgba(183, 28, 28, 0.1)', line=dict(width=0), name="Apex Cloud"), row=1, col=1)
+        fig.add_trace(go.Scatter(x=df.index, y=df['HMA_Trend'], line=dict(color='yellow', width=1), name="HMA Baseline"), row=1, col=1)
 
-        # 2. Squeeze Momentum
-        colors = ['#00E676' if v > 0 else '#FF5252' for v in df['Sqz_Mom']]
-        fig.add_trace(go.Bar(x=df.index, y=df['Sqz_Mom'], marker_color=colors, name="Mom"), row=2, col=1)
+        # SMC Visuals
+        for bos in smc['bos']:
+            if bos['idx'] > len(df) - 150:
+                color = AxiomConfig.COLORS['bull_sig'] if bos['type'] == 'bull' else AxiomConfig.COLORS['bear_sig']
+                fig.add_shape(type="line", x0=bos['date'], x1=df.index[-1], y0=bos['price'], y1=bos['price'], line=dict(color=color, width=1, dash="dash"), row=1, col=1)
 
-        # 3. Money Flow Matrix
-        fig.add_trace(go.Scatter(x=df.index, y=df['MF_Matrix'], fill='tozeroy', line=dict(color='cyan', width=1), name="MFI"), row=3, col=1)
+        for ob in smc['ob']:
+            color = AxiomConfig.COLORS['smc_bull'] if ob['type'] == 'bull' else AxiomConfig.COLORS['smc_bear']
+            fig.add_shape(type="rect", x0=ob['x'], x1=df.index[-1], y0=ob['bottom'], y1=ob['top'], fillcolor=color, opacity=0.4, line_width=0, row=1, col=1)
+        
+        for fvg in smc['fvg']:
+            color = AxiomConfig.COLORS['smc_bull'] if fvg['type'] == 'bull' else AxiomConfig.COLORS['smc_bear']
+            fig.add_shape(type="rect", x0=fvg['x0'], x1=df.index[-1], y0=fvg['bottom'], y1=fvg['top'], fillcolor=color, opacity=0.3, line_width=0, row=1, col=1)
 
-        # 4. CHEDO (Entropy)
-        fig.add_trace(go.Scatter(x=df.index, y=df['CHEDO'], line=dict(color='#D500F9', width=2), fill='tozeroy', fillcolor='rgba(213, 0, 249, 0.1)', name="Entropy"), row=4, col=1)
-        fig.add_hline(y=0.8, line_dash="dot", line_color="red", row=4, col=1)
+        # Signals
+        buys = df[df['Sig_Buy']]
+        sells = df[df['Sig_Sell']]
+        fig.add_trace(go.Scatter(x=buys.index, y=buys['Low'], mode='markers', marker=dict(symbol='triangle-up', size=10, color=AxiomConfig.COLORS['bull_sig']), name="BUY"), row=1, col=1)
+        fig.add_trace(go.Scatter(x=sells.index, y=sells['High'], mode='markers', marker=dict(symbol='triangle-down', size=10, color=AxiomConfig.COLORS['bear_sig']), name="SELL"), row=1, col=1)
 
-        # 5. Flux (Vector)
-        flux_cols = np.where(df['Apex_Flux'] > 0.6, '#00E676', np.where(df['Apex_Flux'] < -0.6, '#FF1744', '#2979FF'))
-        fig.add_trace(go.Bar(x=df.index, y=df['Apex_Flux'], marker_color=flux_cols, name="Flux"), row=5, col=1)
+        # 2. Entropy
+        fig.add_trace(go.Scatter(x=df.index, y=df['CHEDO'], fill='tozeroy', line=dict(color='#D500F9'), name="Entropy"), row=2, col=1)
 
-        fig.update_layout(height=total_h, template="plotly_dark", margin=dict(l=0, r=0, t=30, b=0), xaxis_rangeslider_visible=False, showlegend=False, paper_bgcolor="#0e1117", plot_bgcolor="rgba(0,0,0,0)")
-        st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
+        # 3. WaveTrend
+        fig.add_trace(go.Scatter(x=df.index, y=df['WaveTrend'], fill='tozeroy', line=dict(color='#00F0FF'), name="WaveTrend"), row=3, col=1)
+
+        # 4. Flux
+        colors = np.where(df['Apex_Flux']>0, '#00E676', '#FF1744')
+        fig.add_trace(go.Bar(x=df.index, y=df['Apex_Flux'], marker_color=colors, name="Flux"), row=4, col=1)
+
+        fig.update_layout(height=1000 if is_mobile else 900, template="plotly_dark", margin=dict(l=0,r=0,t=30,b=0), xaxis_rangeslider_visible=False, showlegend=False, paper_bgcolor="#0e1117")
+        st.plotly_chart(fig, use_container_width=True)
 
 # ==========================================
 # 7. MAIN ORCHESTRATION
@@ -579,99 +421,116 @@ class Dashboard:
 def main():
     st.set_page_config(page_title=AxiomConfig.PAGE_TITLE, page_icon=AxiomConfig.PAGE_ICON, layout=AxiomConfig.LAYOUT)
     
-    # Sidebar Controls
+    # Sidebar
     st.sidebar.markdown("## 💠 SYSTEM CONTROL")
     is_mobile = st.sidebar.toggle("📱 Mobile Mode", value=True)
     
-    # Credentials (Auto-Load Logic)
     with st.sidebar.expander("🔐 Credentials"):
-        # Auto-fill from secrets if available
-        default_ai = AxiomConfig.get_secret("OPENAI_API_KEY")
-        default_token = AxiomConfig.get_secret("TELEGRAM_TOKEN")
-        default_chat = AxiomConfig.get_secret("TELEGRAM_CHAT_ID")
+        openai_key = st.text_input("OpenAI Key", value=AxiomConfig.get_secret("OPENAI_API_KEY"), type="password")
+        tg_token = st.text_input("TG Token", value=AxiomConfig.get_secret("TELEGRAM_TOKEN"), type="password")
+        tg_chat = st.text_input("TG Chat ID", value=AxiomConfig.get_secret("TELEGRAM_CHAT_ID"))
 
-        openai_key = st.text_input("OpenAI Key", value=default_ai, type="password")
-        tg_token = st.text_input("TG Token", value=default_token, type="password")
-        tg_chat = st.text_input("TG Chat ID", value=default_chat)
-
-    # Inputs
     cat = st.sidebar.selectbox("Sector", list(AxiomConfig.ASSETS.keys()))
     ticker = st.sidebar.selectbox("Asset", AxiomConfig.ASSETS[cat])
-    tf = st.sidebar.selectbox("Interval", ["15m", "1h", "4h", "1d", "1wk"], index=2)
+    tf = st.sidebar.selectbox("Interval", ["15m", "1h", "4h", "1d"], index=2)
 
     # Init UI
     UXFactory.inject_css(is_mobile)
-    UXFactory.render_header()
-    
-    # Process Data
-    with st.spinner("Initializing Axiom Physics Engine..."):
+    UXFactory.render_header(cat)
+    UXFactory.render_world_clock()
+
+    # Process
+    with st.spinner("Processing Axiom Physics & SMC Logic..."):
         df = DataCore.fetch_data(ticker, tf)
-        macro_p, macro_c = DataCore.get_macro_data()
-        fund = DataCore.get_fundamentals(ticker)
+        macro_p = DataCore.get_macro_data()
 
         if not df.empty:
             # Run Engines
-            df = QuantEngine.calc_chedo(df)
-            df = QuantEngine.calc_rqzo(df)
-            df = QuantEngine.calc_apex_flux(df)
-            df = QuantEngine.calc_god_mode(df)
-            smc = QuantEngine.calc_smc(df)
-            
+            df = QuantEngine.calc_physics(df)
+            df, smc_data = QuantEngine.calc_apex_smc_strategy(df)
             last = df.iloc[-1]
-            
-            # --- VIEW LAYER ---
-            
-            # 1. Top Metrics (Desktop) or Card (Mobile)
+
+            # Top Metrics
             if is_mobile:
-                st.markdown(Intelligence.generate_mobile_card(last, ticker), unsafe_allow_html=True)
+                st.markdown(f"""
+                <div class="report-card">
+                    <div class="report-header">💠 {ticker}: {last['Close']:.2f}</div>
+                    <div class="report-item">Trend: <span class="highlight">{'BULL' if last['Trend']==1 else 'BEAR'}</span></div>
+                    <div class="report-item">Flux: <span class="highlight">{last['Apex_Flux']:.2f}</span></div>
+                </div>
+                """, unsafe_allow_html=True)
             else:
                 c1, c2, c3, c4 = st.columns(4)
                 c1.metric("Price", f"{last['Close']:.2f}")
-                c2.metric("God Mode", f"{last['GM_Score']:.0f}/3", delta="Strong Buy" if last['GM_Score']>2 else "Neutral")
-                c3.metric("Entropy", f"{last['CHEDO']:.2f}", delta="Critical" if abs(last['CHEDO'])>0.8 else "Stable", delta_color="inverse")
+                c2.metric("Trend", "BULL" if last['Trend']==1 else "BEAR", delta=f"{last['HMA_Trend']:.2f}")
+                c3.metric("Entropy", f"{last['CHEDO']:.2f}")
                 c4.metric("Flux", f"{last['Apex_Flux']:.2f}")
-            
-            # 2. Tabs
-            tabs = st.tabs(["📉 Charts", "🧠 Intelligence", "📊 Volume", "🔮 Simulation", "📡 Broadcast", "🌍 Macro"])
+
+            # Tabs
+            tabs = st.tabs(["📉 Axiom Charts", "📡 Broadcast", "🧠 Strategy Guide", "📊 Volume", "🌍 Macro"])
             
             with tabs[0]:
-                Dashboard.render_physics_charts(df, smc, is_mobile)
-            
+                Dashboard.render_charts(df, smc_data, is_mobile)
+
             with tabs[1]:
-                if st.button("Run AI Analysis", use_container_width=True):
-                    analysis = Intelligence.analyze_ai(df, ticker, openai_key)
-                    st.markdown(analysis)
-            
+                st.markdown("### 📡 Signal Broadcaster")
+                UXFactory.render_tradingview_widget(ticker, tf)
+                
+                c1, c2 = st.columns(2)
+                with c1:
+                    st.markdown("#### ⚡ Quick Signal")
+                    default_quick = Intelligence.generate_quick_signal(df, ticker)
+                    msg_quick = st.text_area("Payload", value=default_quick, height=150, key="quick")
+                    if st.button("🚀 Send Trade Signal", use_container_width=is_mobile):
+                        success, info = Intelligence.broadcast(msg_quick, tg_token, tg_chat)
+                        if success: st.success(info)
+                        else: st.error(info)
+                
+                with c2:
+                    st.markdown("#### 📄 Architect Report")
+                    default_report = Intelligence.generate_signal_report(df, ticker, smc_data)
+                    msg_report = st.text_area("Report Payload", value=default_report, height=350, key="report")
+                    if st.button("📨 Send Architect Report", use_container_width=is_mobile):
+                        success, info = Intelligence.broadcast(msg_report, tg_token, tg_chat)
+                        if success: st.success(info)
+                        else: st.error(info)
+
             with tabs[2]:
-                vp, poc = QuantEngine.calc_volume_profile(df)
-                st.bar_chart(vp.set_index('Price')['Volume'])
-                st.caption(f"Point of Control (POC): {poc:.2f}")
+                st.markdown("### 🧠 Smart Money Concepts (SMC) Guide")
+                
+                with st.expander("1. Market Structure (BOS & CHoCH)", expanded=True):
+                    st.markdown("""
+                    **Break of Structure (BOS):**
+                    * **Definition:** When price breaks a significant Pivot High (in an uptrend) or Pivot Low (in a downtrend) in the direction of the trend.
+                    * **Significance:** Confirms trend continuation.
+                    
+                    **Change of Character (CHoCH):**
+                    * **Definition:** When price breaks the last significant pivot *against* the trend (e.g., breaking a Higher Low in an uptrend).
+                    * **Significance:** Signals a potential trend reversal.
+                    """)
+                
+                with st.expander("2. Order Blocks (OB)"):
+                    st.markdown("""
+                    **Definition:** The last candle of the opposing color before a strong impulse move (BOS).
+                    * **Bullish OB:** The last SELL candle before a strong BUY move.
+                    * **Bearish OB:** The last BUY candle before a strong SELL move.
+                    **Usage:** These zones act as high-probability support/resistance for re-entries.
+                    """)
+                
+                with st.expander("3. Fair Value Gaps (FVG)"):
+                    st.markdown("""
+                    **Definition:** A three-candle pattern where the 1st candle's high/low does not overlap with the 3rd candle's low/high, leaving a gap.
+                    **Physics:** Represents an inefficiency in the market (imbalance) that price often returns to "fill".
+                    """)
 
             with tabs[3]:
-                paths = QuantEngine.run_monte_carlo(df)
-                st.line_chart(paths[:, :50])
-                st.caption("Monte Carlo: 30-day projected price paths based on historical volatility.")
-
+                st.bar_chart(df['Volume'].tail(100))
+            
             with tabs[4]:
-                st.subheader("📡 Telegram Command")
-                # Pre-filled payload for speed
-                default_msg = f"💠 AXIOM SIGNAL: {ticker}\nPrice: {last['Close']:.2f}\nGM Score: {last['GM_Score']:.0f}\nFlux: {last['Apex_Flux']:.2f}"
-                msg = st.text_area("Broadcast Message", value=default_msg)
-                
-                if st.button("🚀 Transmit Signal", use_container_width=True):
-                    ok, info = Intelligence.broadcast(msg, tg_token, tg_chat)
-                    if ok: st.success(info)
-                    else: st.error(info)
+                st.write(macro_p)
 
-            with tabs[5]:
-                c1, c2 = st.columns(2)
-                c1.metric("S&P 500", f"{macro_p.get('S&P 500', 0):.2f}", f"{macro_c.get('S&P 500', 0):.2f}%")
-                c2.metric("VIX", f"{macro_p.get('VIX', 0):.2f}", f"{macro_c.get('VIX', 0):.2f}%")
-                if fund:
-                    st.markdown("---")
-                    st.write(f"**Fundamentals**: {fund.get('Summary', 'N/A')}")
         else:
-            st.error("Data Unavailable. Check Ticker/Interval.")
+            st.error("Data Unavailable.")
 
 if __name__ == "__main__":
     main()
