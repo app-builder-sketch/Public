@@ -220,12 +220,13 @@ class DataCore:
             return prices, changes
         except: return {}, {}
 # ==========================================
-# 4. QUANT ENGINE (PHYSICS + GOD MODE)
+# 4. QUANT ENGINE (FIXED)
 # ==========================================
 class QuantEngine:
     
     @staticmethod
-    def tanh(x): return np.tanh(np.clip(x, -20, 20))
+    def tanh(x): 
+        return np.tanh(np.clip(x, -20, 20))
 
     # --- HELPER FUNCTIONS ---
     @staticmethod
@@ -255,19 +256,32 @@ class QuantEngine:
     def calc_chedo(df: pd.DataFrame, length: int = 50) -> pd.DataFrame:
         """Calculates CHEDO (Chaos/Entropy Dynamics)."""
         c = df['Close'].values
+        # Log Returns
         log_ret = np.diff(np.log(c), prepend=np.log(c[0]))
+        
+        # Volatility & Hyperbolic Distance
         mu = pd.Series(log_ret).rolling(length).mean().values
         sigma = pd.Series(log_ret).rolling(length).std().values
         v = sigma / (np.abs(mu) + 1e-9)
         abs_ret_v = np.abs(log_ret) * v
         hyper_dist = np.log(abs_ret_v + np.sqrt(abs_ret_v**2 + 1))
+        
+        # Kappa (Curvature)
         kappa_h = QuantEngine.tanh(pd.Series(hyper_dist).rolling(length).mean().values)
+        
+        # Lyapunov Proxy
         diff_ret = np.diff(log_ret, prepend=0)
         lyap = np.log(np.abs(diff_ret) + 1e-9)
         lambda_n = QuantEngine.tanh((pd.Series(lyap).rolling(length).mean().values + 5) / 7)
+        
+        # Entropy
         ent = pd.Series(log_ret**2).rolling(length).sum().values
         ent_n = QuantEngine.tanh(ent * 10)
+        
+        # Synthesis
         raw = (0.4 * kappa_h) + (0.3 * lambda_n) + (0.3 * ent_n)
+        
+        # Assign directly as numpy array to avoid index issues
         df['CHEDO'] = 2 / (1 + np.exp(-raw * 4)) - 1
         return df
 
@@ -276,18 +290,26 @@ class QuantEngine:
         """Calculates RQZO (Relativistic Quantum Oscillator)."""
         src = df['Close']
         mn, mx = src.rolling(100).min(), src.rolling(100).max()
+        # Ensure numpy division to avoid index friction
         norm = (src - mn) / (mx - mn + 1e-9)
+        
         v = np.abs(norm.diff())
         c_limit = 0.05
-        gamma = 1 / np.sqrt(1 - (np.minimum(v, c_limit*0.99)/c_limit)**2)
+        # FillNa(1.0) on gamma to treat missing initial data as 'normal time'
+        gamma_series = 1 / np.sqrt(1 - (np.minimum(v, c_limit*0.99)/c_limit)**2)
+        gamma = gamma_series.fillna(1.0).values
+        
         idx = np.arange(len(df))
-        tau = (idx % 100) / gamma.fillna(1.0)
+        tau = (idx % 100) / gamma
         zeta = np.zeros(len(df))
+        
         for n in range(1, harmonics + 1):
             amp = n ** -0.5
             theta = tau * np.log(n)
             zeta += amp * np.sin(theta)
-        df['RQZO'] = pd.Series(zeta).fillna(0)
+            
+        # FIX: Assign numpy array directly so Pandas infers alignment by order
+        df['RQZO'] = zeta
         return df
 
     @staticmethod
@@ -295,12 +317,24 @@ class QuantEngine:
         """Calculates Apex Flux (Vector Efficiency)."""
         rg = df['High'] - df['Low']
         body = np.abs(df['Close'] - df['Open'])
+        
+        # Calculate raw efficiency (numpy array)
         eff_raw = np.where(rg == 0, 0, body / rg)
-        eff_sm = pd.Series(eff_raw).ewm(span=length).mean()
+        
+        # FIX: Create Series with df.index explicitly to allow alignment
+        eff_sm = pd.Series(eff_raw, index=df.index).ewm(span=length).mean()
+        
         vol_avg = df['Volume'].rolling(55).mean()
+        # numpy array
         v_rat = np.where(vol_avg == 0, 1, df['Volume'] / vol_avg)
+        
+        # Pandas Series (DatetimeIndex)
         direction = np.sign(df['Close'] - df['Open'])
+        
+        # Now all components align: 
+        # direction (Series w/ DateIndex) * eff_sm (Series w/ DateIndex) * v_rat (Broadcasted Array)
         raw = direction * eff_sm * v_rat
+        
         df['Apex_Flux'] = pd.Series(raw).ewm(span=5).mean()
         return df
 
@@ -319,12 +353,11 @@ class QuantEngine:
         df['Apex_Trend'] = df['Apex_Trend'].replace(0, method='ffill')
 
         # 3. Squeeze Momentum
-        # Bollinger
         basis = df['Close'].rolling(20).mean()
         dev = df['Close'].rolling(20).std() * 2.0
         upper_bb = basis + dev
         lower_bb = basis - dev
-        # Keltner
+        
         ma_kc = df['Close'].rolling(20).mean()
         range_ma = QuantEngine.calculate_atr(df, 20)
         upper_kc = ma_kc + (range_ma * 1.5)
@@ -350,7 +383,6 @@ class QuantEngine:
         df['MF_Matrix'] = (rsi_src * mf_vol).ewm(span=3).mean()
 
         # 5. God Mode Score
-        # Aggregating Apex, Squeeze, and Flux for a composite score
         df['GM_Score'] = (
             df['Apex_Trend'] + 
             np.sign(df['Sqz_Mom']) + 
@@ -379,7 +411,6 @@ class QuantEngine:
 
     @staticmethod
     def run_monte_carlo(df: pd.DataFrame, days: int = 30, sims: int = 100) -> np.ndarray:
-        """Monte Carlo Simulation."""
         last = df['Close'].iloc[-1]
         rets = df['Close'].pct_change().dropna()
         if rets.empty: return np.zeros((days, sims))
@@ -392,7 +423,6 @@ class QuantEngine:
 
     @staticmethod
     def calc_volume_profile(df: pd.DataFrame, bins: int = 50):
-        """Volume Profile (VPVR)."""
         price_bins = np.linspace(df['Low'].min(), df['High'].max(), bins)
         df['Bin'] = pd.cut(df['Close'], bins=price_bins, include_lowest=True)
         vp = df.groupby('Bin', observed=False)['Volume'].sum().reset_index()
