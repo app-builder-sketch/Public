@@ -2,12 +2,14 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
+import plotly.express as px
 from plotly.subplots import make_subplots
 import yfinance as yf
 import requests
 from openai import OpenAI
 import streamlit.components.v1 as components
 from datetime import datetime
+from scipy.stats import linregress
 
 # ==========================================
 # 1. CORE CONFIGURATION
@@ -27,7 +29,6 @@ def inject_axiom_css(is_mobile):
     Injects the 'DarkPool/Neon' aesthetic CSS.
     Adapts font sizes and margins based on the Mobile Toggle.
     """
-    # Global & Shared Styles
     base_css = """
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Roboto+Mono:wght@300;400;700&family=SF+Pro+Display:wght@300;500;700&display=swap');
@@ -81,8 +82,8 @@ def inject_axiom_css(is_mobile):
         div[data-testid="stMetricValue"] { color: #fff; font-weight: 300; }
         
         /* TABS */
-        .stTabs [data-baseweb="tab-list"] { gap: 15px; background-color: transparent; border-bottom: 1px solid #222; }
-        .stTabs [data-baseweb="tab"] { background-color: transparent; border: none; color: #666; }
+        .stTabs [data-baseweb="tab-list"] { gap: 5px; background-color: transparent; border-bottom: 1px solid #222; }
+        .stTabs [data-baseweb="tab"] { background-color: transparent; border: none; color: #666; font-size: 0.9rem; }
         .stTabs [aria-selected="true"] { color: #fff; border-bottom: 2px solid #00F0FF; }
         
         /* INPUT FIELDS */
@@ -91,10 +92,22 @@ def inject_axiom_css(is_mobile):
         
         /* BUTTONS */
         button { border-radius: 4px !important; }
+
+        /* MOBILE REPORT CARDS */
+        .report-card {
+            background-color: #111;
+            border-left: 4px solid #00F0FF;
+            padding: 15px;
+            border-radius: 4px;
+            margin-bottom: 10px;
+            font-family: 'SF Pro Display', sans-serif;
+        }
+        .report-header { font-size: 1.1rem; font-weight: bold; color: #fff; margin-bottom: 8px; border-bottom: 1px solid #333; padding-bottom: 5px; }
+        .report-item { margin-bottom: 5px; font-size: 0.9rem; color: #aaa; }
+        .highlight { color: #00F0FF; font-weight: bold; }
     </style>
     """
     
-    # Desktop Specifics
     desktop_css = """
     <style>
         div[data-testid="stMetricLabel"] { font-size: 0.75rem; }
@@ -102,7 +115,6 @@ def inject_axiom_css(is_mobile):
     </style>
     """
     
-    # Mobile Specifics (Touch Optimized)
     mobile_css = """
     <style>
         div[data-testid="stMetric"] {
@@ -124,7 +136,7 @@ def inject_axiom_css(is_mobile):
         st.markdown(desktop_css, unsafe_allow_html=True)
 
 def render_ticker_banner():
-    """Renders scrolling marquee."""
+    """Renders scrolling marquee of live prices."""
     try:
         tickers = ["BTC-USD", "ETH-USD", "SOL-USD", "SPY", "QQQ", "IWM", "NVDA", "GLD", "USO", "VIX"]
         data = yf.download(tickers, period="1d", interval="1d", progress=False)['Close'].iloc[-1]
@@ -229,8 +241,44 @@ class DataService:
             return df.dropna().tail(limit)
         except: return pd.DataFrame()
 
+    @staticmethod
+    def get_fundamentals(ticker):
+        if "-" in ticker or "=" in ticker: return None
+        try:
+            stock = yf.Ticker(ticker)
+            return {
+                "Market Cap": stock.info.get("marketCap", "N/A"),
+                "P/E Ratio": stock.info.get("trailingPE", "N/A"),
+                "Rev Growth": stock.info.get("revenueGrowth", "N/A"),
+                "Debt/Equity": stock.info.get("debtToEquity", "N/A"),
+                "Summary": stock.info.get("longBusinessSummary", "No Data")
+            }
+        except: return None
+
+    @staticmethod
+    def get_global_performance():
+        assets = {"Tech (XLK)": "XLK", "Energy (XLE)": "XLE", "Financials (XLF)": "XLF", "Bitcoin (BTC)": "BTC-USD", "Gold (GLD)": "GLD"}
+        try:
+            data = yf.download(list(assets.values()), period="5d", interval="1d", progress=False)['Close']
+            res = {}
+            for name, tick in assets.items():
+                if tick in data.columns:
+                    res[name] = ((data[tick].iloc[-1] - data[tick].iloc[-2]) / data[tick].iloc[-2]) * 100
+            return pd.Series(res).sort_values()
+        except: return None
+
+    @staticmethod
+    def get_macro_data():
+        assets = {"S&P 500": "SPY", "Nasdaq": "QQQ", "10Y Yield": "^TNX", "VIX": "^VIX", "DXY": "DX-Y.NYB"}
+        try:
+            data = yf.download(list(assets.values()), period="5d", interval="1d", progress=False)['Close']
+            prices = {k: data[v].iloc[-1] for k,v in assets.items() if v in data}
+            changes = {k: ((data[v].iloc[-1]-data[v].iloc[-2])/data[v].iloc[-2])*100 for k,v in assets.items() if v in data}
+            return prices, changes
+        except: return {}, {}
+
 # ==========================================
-# 4. PHYSICS ENGINE
+# 4. QUANTITATIVE ENGINE (PHYSICS & TITAN)
 # ==========================================
 class QuantEngine:
     @staticmethod
@@ -304,6 +352,75 @@ class QuantEngine:
         df['Pivot_L'] = df['Low'].rolling(p*2+1, center=True).min() == df['Low']
         return df
 
+    @staticmethod
+    def calc_fear_greed_v4(df):
+        delta = df['Close'].diff()
+        gain = delta.clip(lower=0).rolling(14).mean()
+        loss = -delta.clip(upper=0).rolling(14).mean()
+        rsi = 100 - (100 / (1 + gain/loss))
+        macd = df['Close'].ewm(span=12).mean() - df['Close'].ewm(span=26).mean()
+        df['FG_Index'] = (rsi + (macd * 10)).clip(0, 100).rolling(5).mean()
+        return df
+
+    @staticmethod
+    def calc_volume_profile(df, bins=50):
+        price_min = df['Low'].min(); price_max = df['High'].max()
+        price_bins = np.linspace(price_min, price_max, bins)
+        df['Mid'] = (df['Close'] + df['Open']) / 2
+        df['Bin'] = pd.cut(df['Mid'], bins=price_bins, labels=price_bins[:-1], include_lowest=True)
+        vp = df.groupby('Bin', observed=False)['Volume'].sum().reset_index()
+        vp['Price'] = vp['Bin'].astype(float)
+        poc_idx = vp['Volume'].idxmax()
+        poc_price = vp.loc[poc_idx, 'Price']
+        return vp, poc_price
+
+    @staticmethod
+    def calc_smc_advanced(df, swing=5):
+        smc = {'structures': [], 'order_blocks': []}
+        df['PH'] = df['High'].rolling(swing*2+1, center=True).max() == df['High']
+        df['PL'] = df['Low'].rolling(swing*2+1, center=True).min() == df['Low']
+        
+        last_h = None; last_l = None
+        for i in range(swing, len(df)):
+            if df['PH'].iloc[i]:
+                if last_h: smc['structures'].append({'x0':last_h[0], 'y':last_h[1], 'x1':df.index[i], 'color':'red'})
+                last_h = (df.index[i], df['High'].iloc[i])
+            if df['PL'].iloc[i]:
+                if last_l: smc['structures'].append({'x0':last_l[0], 'y':last_l[1], 'x1':df.index[i], 'color':'green'})
+                last_l = (df.index[i], df['Low'].iloc[i])
+        return smc
+
+    @staticmethod
+    def run_monte_carlo(df, days=30, sims=100):
+        last_price = df['Close'].iloc[-1]
+        returns = df['Close'].pct_change().dropna()
+        mu = returns.mean(); sigma = returns.std()
+        sim_rets = np.random.normal(mu, sigma, (days, sims))
+        paths = np.zeros((days, sims)); paths[0] = last_price
+        for t in range(1, days): paths[t] = paths[t-1] * (1 + sim_rets[t])
+        return paths
+
+    @staticmethod
+    def calc_day_of_week_dna(ticker):
+        try:
+            df = yf.download(ticker, period="2y", interval="1d", progress=False)
+            df['Day'] = df.index.day_name()
+            df['Ret'] = df['Close'].pct_change() * 100
+            stats = df.groupby('Day')['Ret'].mean()
+            return stats
+        except: return None
+
+    @staticmethod
+    def calc_mtf_trend(ticker):
+        try:
+            trends = {}
+            for tf in ['1d', '1wk']:
+                df = yf.download(ticker, period="1y", interval=tf, progress=False)
+                sma50 = df['Close'].rolling(50).mean().iloc[-1]
+                trends[tf] = "BULL" if df['Close'].iloc[-1] > sma50 else "BEAR"
+            return trends
+        except: return {}
+
 # ==========================================
 # 5. INTELLIGENCE (AI & BROADCAST)
 # ==========================================
@@ -317,11 +434,7 @@ class Intelligence:
     def generate_quick_signal(df, ticker):
         """Generates the Normal/Quick trade signal (Short format)."""
         last = df.iloc[-1]
-        
-        # Trend Logic
         trend = "🐂 BULLISH" if last['Trend_Dir'] == 1 else "🐻 BEARISH"
-        
-        # Flux Logic
         flux = last['Apex_Flux']
         if flux > 0.6: flux_txt = "🟢 SUPER BULL"
         elif flux < -0.6: flux_txt = "🔴 SUPER BEAR"
@@ -336,24 +449,36 @@ class Intelligence:
 """
 
     @staticmethod
+    def generate_mobile_card(last, ticker, smart_stop, tp1, tp2, tp3, fg_index):
+        is_bull = last['Trend_Dir'] == 1
+        direction = "LONG 🐂" if is_bull else "SHORT 🐻"
+        return f"""
+        <div class="report-card">
+            <div class="report-header">💠 SIGNAL: {direction}</div>
+            <div class="report-item">Asset: <span class="highlight">{ticker}</span></div>
+            <div class="report-item">Confidence: <span class="highlight">{"HIGH" if abs(last['Apex_Flux'])>0.6 else "MED"}</span></div>
+            <div class="report-item">Sentiment: <span class="highlight">{fg_index:.0f}/100</span></div>
+        </div>
+        <div class="report-card">
+            <div class="report-header">🎯 EXECUTION</div>
+            <div class="report-item">Entry: <span class="highlight">{last['Close']:.2f}</span></div>
+            <div class="report-item">🛑 STOP: <span class="highlight">{smart_stop:.2f}</span></div>
+            <div class="report-item">1️⃣ TP1: <span class="highlight">{tp1:.2f}</span></div>
+            <div class="report-item">2️⃣ TP2: <span class="highlight">{tp2:.2f}</span></div>
+            <div class="report-item">3️⃣ TP3: <span class="highlight">{tp3:.2f}</span></div>
+        </div>
+        """
+
+    @staticmethod
     def generate_signal_report(df, ticker):
-        """
-        Generates the Detailed Report (Long format) with Educational Explanations.
-        """
         last = df.iloc[-1]
         trend_emoji = "🐂 BULLISH" if last['Trend_Dir'] == 1 else "🐻 BEARISH"
-        
-        # Flux & Explanation
         flux_val = last['Apex_Flux']
         flux_emoji = "🟢 Superconductor" if abs(flux_val) > 0.6 else "⚪ Neutral"
         flux_expl = "Price moving with zero resistance (High Efficiency)." if abs(flux_val) > 0.6 else "Market faces friction; standard volatility applies."
-        
-        # Entropy & Explanation
         chedo_val = last['CHEDO']
         entropy_status = "⚠️ CRITICAL CHAOS" if abs(chedo_val) > 0.8 else "✅ Stable State"
         chedo_expl = "High probability of mean-reversion/snap-back." if abs(chedo_val) > 0.8 else "Trend behavior is reliable."
-        
-        # Relativity
         rqzo_val = last['RQZO']
         rqzo_expl = "Time-dilation high; expect explosive moves." if abs(rqzo_val) > 1 else "Standard market velocity."
         
@@ -456,11 +581,16 @@ class Graphics:
         
         fig = make_subplots(rows=4, cols=1, shared_xaxes=True, vertical_spacing=0.03 if is_mobile else 0.015, row_heights=row_heights, specs=[[{"secondary_y": False}], [{}], [{}], [{}]], subplot_titles=("", "", "", ""))
 
-        # P1: Price
+        # P1: Price + Advanced SMC Overlay (Titan Feature)
+        smc = QuantEngine.calc_smc_advanced(df)
         fig.add_trace(go.Scatter(x=df.index, y=df['HMA_Trend'], mode='lines', line=dict(width=0), showlegend=False, hoverinfo='skip'), row=1, col=1)
         fig.add_trace(go.Scatter(x=df.index, y=df['Close'], fill='tonexty', fillcolor='rgba(255, 255, 255, 0.02)', mode='lines', line=dict(width=0), showlegend=False), row=1, col=1)
         fig.add_trace(go.Candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'], name="Price", increasing_line_color='#00F0FF', increasing_fillcolor='rgba(0,240,255,0.1)', decreasing_line_color='#FF0055', decreasing_fillcolor='rgba(255,0,85,0.1)'), row=1, col=1)
         fig.add_trace(go.Scatter(x=df.index, y=df['HMA_Trend'], line=dict(color='#FFFFFF', width=1, dash='dot'), name="SMC Base"), row=1, col=1)
+        
+        for s in smc['structures']:
+            fig.add_shape(type="line", x0=s['x0'], x1=s['x1'], y0=s['y'], y1=s['y'], line=dict(color=s['color'], width=1, dash="dot"), row=1, col=1)
+
         bos_h = df[df['Pivot_H']]; bos_l = df[df['Pivot_L']]
         fig.add_trace(go.Scatter(x=bos_h.index, y=bos_h['High'], mode='markers', marker=dict(symbol='triangle-down', size=10, color='#FFD700', line=dict(width=1, color='black')), name="Struct High"), row=1, col=1)
         fig.add_trace(go.Scatter(x=bos_l.index, y=bos_l['Low'], mode='markers', marker=dict(symbol='triangle-up', size=10, color='#FFD700', line=dict(width=1, color='black')), name="Struct Low"), row=1, col=1)
@@ -515,17 +645,21 @@ def main():
             st.error("Market Data Unavailable.")
             return
         try:
-            df = QuantEngine.calc_chedo(df); df = QuantEngine.calc_rqzo(df); df = QuantEngine.calc_apex_flux(df); df = QuantEngine.calc_smc(df)
+            df = QuantEngine.calc_chedo(df); df = QuantEngine.calc_rqzo(df); df = QuantEngine.calc_apex_flux(df); df = QuantEngine.calc_smc(df); df = QuantEngine.calc_fear_greed_v4(df)
             last = df.iloc[-1]
+            fund = DataService.get_fundamentals(ticker)
+            macro_p, macro_c = DataService.get_macro_data()
         except Exception as e:
             st.error(f"Computation Error: {e}"); return
 
+    # Titan Mobile Report Card (HTML Integration)
+    tp_dist = last['Close'] * 0.05 # Dynamic 5%
+    tp1, tp2, tp3 = last['Close']+tp_dist, last['Close']+(tp_dist*2), last['Close']+(tp_dist*3)
+    if last['Trend_Dir'] == -1: tp1, tp2, tp3 = last['Close']-tp_dist, last['Close']-(tp_dist*2), last['Close']-(tp_dist*3)
+    smart_stop = last['HMA_Trend']
+    
     if is_mobile:
-        c1, c2 = st.columns(2); c3, c4 = st.columns(2)
-        c1.metric("Price", f"{last['Close']:.2f}")
-        c2.metric("Entropy", f"{last['CHEDO']:.2f}", delta="Risk" if abs(last['CHEDO'])>0.7 else "Stable")
-        c3.metric("Relativity", f"{last['RQZO']:.2f}")
-        c4.metric("Flux", f"{last['Apex_Flux']:.2f}", delta=last['Apex_State'])
+        st.markdown(Intelligence.generate_mobile_card(last, ticker, smart_stop, tp1, tp2, tp3, last.get('FG_Index', 50)), unsafe_allow_html=True)
     else:
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("Price", f"{last['Close']:.2f}")
@@ -533,22 +667,39 @@ def main():
         c3.metric("Relativity", f"{last['RQZO']:.2f}")
         c4.metric("Flux", f"{last['Apex_Flux']:.2f}", delta=last['Apex_State'])
 
-    t1, t2, t3, t4 = st.tabs(["📉 Tech", "🧠 AI", "📈 View", "📡 Msg"])
+    # EXTENDED TABS (Titan Features)
+    tabs = st.tabs(["📉 Tech", "🌍 Macro", "📅 Seasonality", "🧠 AI", "📊 Volume", "🔮 Quant", "📡 Broadcast"])
     
-    with t1: Graphics.render_dashboard(df, ticker, is_mobile)
-    with t2:
+    with tabs[0]: Graphics.render_dashboard(df, ticker, is_mobile)
+    with tabs[1]:
+        st.subheader("Global Macro Context")
+        c1, c2 = st.columns(2)
+        c1.metric("S&P 500", f"${macro_p.get('S&P 500',0):.2f}", f"{macro_c.get('S&P 500',0):.2f}%")
+        c2.metric("VIX", f"{macro_p.get('VIX',0):.2f}", f"{macro_c.get('VIX',0):.2f}%")
+        if fund:
+            st.write(f"**{ticker} Fundamentals**: Cap {fund['Market Cap']} | PE {fund['P/E Ratio']}")
+    with tabs[2]:
+        st.subheader("Day of Week DNA")
+        dna = QuantEngine.calc_day_of_week_dna(ticker)
+        if dna is not None: st.bar_chart(dna)
+    with tabs[3]:
         if st.button("Run Intelligence", use_container_width=is_mobile):
             res = Intelligence.analyze(df, ticker, openai_key)
             st.markdown(res)
-    with t3:
+    with tabs[4]:
+        vp, poc = QuantEngine.calc_volume_profile(df)
+        st.bar_chart(vp.set_index('Price')['Volume'])
+        st.caption(f"POC Level: {poc:.2f}")
+    with tabs[5]:
+        mc = QuantEngine.run_monte_carlo(df)
+        st.line_chart(mc[:, :20]) # Show first 20 paths
+    with tabs[6]:
         h = 500 if is_mobile else 650
         tv_sym = ticker.replace("-", "").replace("=X", "").replace("=F", "")
         html = f"""<div class="tradingview-widget-container"><div id="tradingview_widget"></div><script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script><script type="text/javascript">new TradingView.widget({{"width": "100%", "height": {h}, "symbol": "{tv_sym}", "interval": "D", "timezone": "Etc/UTC", "theme": "dark", "style": "1", "locale": "en", "toolbar_bg": "#f1f3f6", "enable_publishing": false, "hide_side_toolbar": false, "allow_symbol_change": true, "details": true, "container_id": "tradingview_widget"}});</script></div>"""
         st.components.v1.html(html, height=h)
-    with t4:
-        st.subheader("📡 Signal Broadcaster")
         
-        # 1. QUICK SIGNAL (Restored)
+        st.subheader("📡 Signal Broadcaster")
         st.markdown("#### ⚡ Quick Signal")
         default_quick = Intelligence.generate_quick_signal(df, ticker)
         msg_quick = st.text_area("Payload", value=default_quick, height=150, key="quick")
@@ -558,8 +709,6 @@ def main():
             else: st.error(info)
             
         st.divider()
-        
-        # 2. DETAILED REPORT (Preserved with Explanations)
         st.markdown("#### 📄 Detailed Report & Education")
         default_report = Intelligence.generate_signal_report(df, ticker)
         msg_report = st.text_area("Report Payload", value=default_report, height=350, key="report")
