@@ -238,12 +238,12 @@ class QuantumCore:
         df['BB_Up'] = df['BB_Mid'] + (2 * df['BB_Std'])
         df['BB_Low'] = df['BB_Mid'] - (2 * df['BB_Std'])
         
-        # MACD (Added back to prevent omissions)
+        # MACD (Prevent Omissions)
         df['MACD'] = df['EMA_12'] - df['EMA_26']
         df['MACD_Signal'] = df['MACD'].ewm(span=9, adjust=False).mean()
         df['MACD_Hist'] = df['MACD'] - df['MACD_Signal']
         
-        # RSI (CRITICAL FIX: Added back to prevent KeyError)
+        # RSI (Calculate explicitly here to ensure column exists)
         delta = df['Close'].diff()
         gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
         loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
@@ -852,6 +852,13 @@ def main():
             if df is not None:
                 # RUN FULL PIPELINE
                 df = QuantumCore.calc_pipeline(df)
+                
+                # --- CRITICAL FIX FOR INDEXERROR ---
+                if df.empty:
+                    st.error("⚠️ INSUFFICIENT DATA: The selected asset/timeframe does not have enough history to calculate all indicators (e.g., 200 SMA). Please choose a higher timeframe or a more established asset.")
+                    st.stop()
+                # -----------------------------------
+                
                 last = df.iloc[-1]
                 vp_data = QuantumCore.calc_vp(df)
                 
