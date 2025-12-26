@@ -310,11 +310,14 @@ def load_secrets():
     k = {"gem": "", "oai": "", "tg_t": "", "tg_c": ""}
     s = {"gem": False, "oai": False, "tg": False}
     try:
-        k["gem"] = st.secrets.get("GEMINI_API_KEY", "")
-        k["oai"] = st.secrets.get("OPENAI_API_KEY", "")
-        k["tg_t"] = st.secrets.get("TELEGRAM_TOKEN", "")
-        k["tg_c"] = st.secrets.get("TELEGRAM_CHAT_ID", "")
-    except: pass
+        if hasattr(st, 'secrets'):
+            k["gem"] = st.secrets.get("GEMINI_API_KEY", "")
+            k["oai"] = st.secrets.get("OPENAI_API_KEY", "")
+            k["tg_t"] = st.secrets.get("TELEGRAM_TOKEN", "")
+            k["tg_c"] = st.secrets.get("TELEGRAM_CHAT_ID", "")
+    except FileNotFoundError: pass # Gracefully handle missing secrets file
+    except Exception: pass
+    
     if k["gem"]: s["gem"] = True
     if k["oai"]: s["oai"] = True
     if k["tg_t"] and k["tg_c"]: s["tg"] = True
@@ -355,7 +358,7 @@ class DataEngine:
                 df = df.resample("4h").agg({
                     'Open':'first', 'High':'max', 'Low':'min', 'Close':'last', 'Volume':'sum'
                 }).dropna()
-                
+            
             return df
             
         except Exception as e:
@@ -384,8 +387,8 @@ class DataEngine:
             rev_map = {v: k for k, v in basket.items()}
             df = df.rename(columns=rev_map)
             
-            # Fill NaNs
-            df = df.fillna(method='ffill').fillna(method='bfill')
+            # Fill NaNs - UPDATED for Pandas deprecation
+            df = df.ffill().bfill()
             
             return df
         except: return None
@@ -756,19 +759,37 @@ def main():
                             p = Intelligence.generate_strategy_prompt(ticker, timeframe, last, sc, vp_data, last['Reynolds'])
                             r = "NO KEYS"
                             
-                            # ROBUST SELF-HEALING AI LOGIC
-                            if keys["gem"] and genai:
-                                genai.configure(api_key=keys["gem"])
-                                models = ['gemini-1.5-flash', 'gemini-1.5-pro', 'gemini-1.0-pro', 'gemini-pro']
-                                for m_name in models:
-                                    try:
-                                        r = genai.GenerativeModel(m_name).generate_content(p).text
-                                        break
-                                    except: continue
-                                if r == "NO KEYS": r = "⚠️ AI Service Unavailable. Check API Keys."
-                                
-                            elif keys["oai"] and OpenAI:
-                                r = OpenAI(api_key=keys["oai"]).chat.completions.create(model="gpt-4", messages=[{"role":"user","content":p}]).choices[0].message.content
+                            # ROBUST SELF-HEALING AI LOGIC (FIXED)
+                            # 1. Gemini
+                            gem_key = keys["gem"].strip()
+                            if gem_key and genai:
+                                try:
+                                    genai.configure(api_key=gem_key)
+                                    models = ['gemini-1.5-flash', 'gemini-1.5-pro', 'gemini-1.0-pro', 'gemini-pro']
+                                    for m_name in models:
+                                        try:
+                                            model = genai.GenerativeModel(m_name)
+                                            r = model.generate_content(p).text
+                                            if r: break
+                                        except Exception as e:
+                                            continue
+                                except Exception as e:
+                                    r = f"Gemini Error: {str(e)}"
+                            
+                            # 2. OpenAI Fallback
+                            oai_key = keys["oai"].strip()
+                            if (r == "NO KEYS" or "Error" in r) and oai_key and OpenAI:
+                                try:
+                                    client = OpenAI(api_key=oai_key)
+                                    response = client.chat.completions.create(
+                                        model="gpt-4", 
+                                        messages=[{"role":"user","content":p}]
+                                    )
+                                    r = response.choices[0].message.content
+                                except Exception as e:
+                                    r = f"OpenAI Error: {str(e)}"
+                            
+                            if r == "NO KEYS": r = "⚠️ AI Service Unavailable. Please check API Keys in sidebar."
                             
                             st.markdown(r)
                             
