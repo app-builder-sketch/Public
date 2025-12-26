@@ -678,18 +678,18 @@ class Intelligence:
     @staticmethod
     def construct_telegram_msg(template, ticker, timeframe, last, sc):
         base = f"🔥 *TITAN SIGNAL: {ticker}*\n"
+        # ENSURE STOP (DV) IS IN ALL TEMPLATES AS REQUESTED
         if template == "Scalp":
-            return base + f"⏱️ TF: {timeframe}\n💰 Price: {last['Close']:.2f}\n🚀 Momentum: {last['Sqz_Mom']:.1f}\n🛑 Stop (DV): {last['Dark_Vector_Stop']:.2f}"
+            return base + f"⏱️ TF: {timeframe}\n💰 Price: {last['Close']:.2f}\n🚀 Momentum: {last['Sqz_Mom']:.1f}\n🛑 Stop (DV): {last['Dark_Vector_Stop']:.2f}\n🌊 Flux: {last['Apex_Flux']:.2f}"
         elif template == "Swing":
-            return base + f"🌊 Trend: {'BULL' if last['MCM_Trend']==1 else 'BEAR'}\n🎯 Score: {sc}/4\n🛡️ Stop (DV): {last['Dark_Vector_Stop']:.2f}\n🔮 Entropy: {last['CHEDO']:.2f}"
+            return base + f"🌊 Trend: {'BULL' if last['MCM_Trend']==1 else 'BEAR'}\n🎯 Score: {sc}/4\n🛡️ Stop (DV): {last['Dark_Vector_Stop']:.2f}\n🔮 Entropy: {last['CHEDO']:.2f}\n⚡ Flux: {last['Apex_Flux']:.2f}"
         elif template == "Executive":
             return base + f"📊 *EXECUTIVE BRIEF*\nPrice: {last['Close']:.2f}\nScore: {sc}\nApex: {last['Apex_State']}\nVol Lock: {last['Vector_Locked']}\nStop Ref: {last['Dark_Vector_Stop']:.2f}"
-        else:
-            return base + f"Price: {last['Close']:.2f}\nScore: {sc}\nStop: {last['Dark_Vector_Stop']:.2f}"
+        else: # Standard
+            return base + f"Price: {last['Close']:.2f}\nScore: {sc}\nStop (DV): {last['Dark_Vector_Stop']:.2f}\nFlux: {last['Apex_Flux']:.2f}"
 
     @staticmethod
     def construct_outlook_msg(ticker, timeframe, last, sc):
-        # A broader market update, distinct from a trade signal
         apex_state = last['Apex_State']
         flux = last['Apex_Flux']
         dv_stop = last['Dark_Vector_Stop']
