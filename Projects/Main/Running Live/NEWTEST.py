@@ -57,6 +57,7 @@ class TelegramEngine:
 
     @staticmethod
     def escape_md(text: str) -> str:
+        # Escapes special characters for Telegram MarkdownV2
         escape_chars = r"_*[]()~`>#+-=|{}.!"
         return "".join("\\" + c if c in escape_chars else c for c in text)
 
@@ -104,9 +105,21 @@ class DataEngine:
             "1wk": ("10y", "1wk")
         }
         period, interval = tf_map.get(timeframe, ("1y", "1d"))
+        
+        # Download data
         df = yf.download(ticker, period=period, interval=interval, progress=False)
+        
         if df.empty:
             return None
+
+        # FIX: Handle MultiIndex columns (common in new yfinance versions)
+        if isinstance(df.columns, pd.MultiIndex):
+            try:
+                df.columns = df.columns.droplevel(1)
+            except:
+                pass
+
+        # Handle 4h resampling from 1h data
         if timeframe == "4h":
             df = df.resample("4h").agg({
                 "Open": "first",
@@ -115,6 +128,7 @@ class DataEngine:
                 "Close": "last",
                 "Volume": "sum"
             }).dropna()
+            
         return df
 
 # ===============================
@@ -137,6 +151,7 @@ class QuantumCore:
         df["ATR"] = QuantumCore.atr(df)
 
         df["Trend"] = np.where(df["EMA50"] > df["EMA200"], 1, -1)
+        # Calculate trailing stop logic
         df["Stop"] = df["Close"] - df["ATR"] * df["Trend"]
         df["GM_Score"] = df["Trend"]
         return df.dropna()
@@ -199,7 +214,10 @@ def main():
             ok, msg = TelegramEngine.send(
                 tg_token, tg_chat, "✅ TITAN OMNI Telegram connected"
             )
-            st.success(msg) if ok else st.error(msg)
+            if ok:
+                st.success(msg)
+            else:
+                st.error(msg)
 
         if st.button("🚀 Run Analysis"):
             st.session_state.run_analysis = True
@@ -210,7 +228,7 @@ def main():
 
     df = DataEngine.fetch(ticker, timeframe)
     if df is None:
-        st.error("No data")
+        st.error("No data found or connection failed.")
         return
 
     df = QuantumCore.pipeline(df)
@@ -219,14 +237,17 @@ def main():
     st.metric("Price", f"{last['Close']:.2f}")
     st.metric("GM Score", last["GM_Score"])
 
+    # Charting
     fig = go.Figure(go.Candlestick(
         x=df.index,
         open=df["Open"],
         high=df["High"],
         low=df["Low"],
-        close=df["Close"]
+        close=df["Close"],
+        name="Price"
     ))
-    fig.add_trace(go.Scatter(x=df.index, y=df["Stop"], name="Stop"))
+    fig.add_trace(go.Scatter(x=df.index, y=df["Stop"], name="Stop", line=dict(color='orange')))
+    fig.update_layout(height=500, xaxis_rangeslider_visible=False)
     st.plotly_chart(fig, use_container_width=True)
 
     st.markdown("## 📡 Broadcast")
@@ -236,13 +257,22 @@ def main():
 
     st.text_area("Signal Preview", sig_msg, height=200)
 
-    if st.button("SEND SIGNAL"):
-        ok, msg = TelegramEngine.send(tg_token, tg_chat, sig_msg)
-        st.success("Signal sent") if ok else st.error(msg)
-
-    if st.button("SEND OUTLOOK"):
-        ok, msg = TelegramEngine.send(tg_token, tg_chat, out_msg)
-        st.success("Outlook sent") if ok else st.error(msg)
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("SEND SIGNAL"):
+            ok, msg = TelegramEngine.send(tg_token, tg_chat, sig_msg)
+            if ok:
+                st.success("Signal sent")
+            else:
+                st.error(msg)
+    
+    with col2:
+        if st.button("SEND OUTLOOK"):
+            ok, msg = TelegramEngine.send(tg_token, tg_chat, out_msg)
+            if ok:
+                st.success("Outlook sent")
+            else:
+                st.error(msg)
 
 if __name__ == "__main__":
     main()
