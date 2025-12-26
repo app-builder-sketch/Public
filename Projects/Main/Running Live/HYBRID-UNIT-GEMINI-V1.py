@@ -150,9 +150,9 @@ def render_mobile_card(last):
     <div class="report-card">
         <h3 style="margin-top:0; color:#00E5FF">💠 FIELD REPORT</h3>
         <div class="card-row"><span>GOD MODE SCORE</span><span class="{s_cls}">{sc:.0f}/4</span></div>
-        <div class="card-row"><span>MCM TREND</span><span class="{'bull' if last['MCM_Trend']==1 else 'bear'}">{'BULL' if last['MCM_Trend']==1 else 'BEAR'}</span></div>
         <div class="card-row"><span>VECTOR GATE</span><span class="{'bear' if last['Vector_Locked'] else 'bull'}">{'LOCKED' if last['Vector_Locked'] else 'OPEN'}</span></div>
-        <div class="card-row"><span>ENTROPY</span><span>{last['CHEDO']:.2f}</span></div>
+        <div class="card-row"><span>APEX FLUX</span><span>{last['Apex_Flux']:.2f}</span></div>
+        <div class="card-row"><span>TRAILING STOP</span><span>{last['Dark_Vector_Stop']:.2f}</span></div>
     </div>
     """
     st.markdown(html, unsafe_allow_html=True)
@@ -162,42 +162,34 @@ def render_mobile_card(last):
 # ==========================================
 class QuantumCore:
     """
-    The mathematical engine containing all indicator logic.
-    No code omitted.
+    Integrates Dark Vector (Trend + Chop) and Apex Vector (Flux + Efficiency)
     """
     
     @staticmethod
     def tanh_clamp(x): 
-        # Clamps values to avoid overflow in exp, then applies tanh
         return (np.exp(2.0 * np.clip(x, -20.0, 20.0)) - 1.0) / (np.exp(2.0 * np.clip(x, -20.0, 20.0)) + 1.0)
     
     @staticmethod
     def wma(s, l): 
-        # Weighted Moving Average
         w = np.arange(1, l + 1)
         return s.rolling(l).apply(lambda x: np.dot(x, w) / w.sum(), raw=True)
 
     @staticmethod
     def hma(s, l):
-        # Hull Moving Average
         return QuantumCore.wma(2 * QuantumCore.wma(s, int(l/2)) - QuantumCore.wma(s, l), int(np.sqrt(l)))
 
     @staticmethod
     def zlema(s, l):
-        # Zero Lag EMA
         return (s + (s - s.shift(int((l-1)/2)))).ewm(span=l, adjust=False).mean()
 
     @staticmethod
     def atr(df, l=14):
-        # Average True Range
         h, l_low, c_prev = df['High'], df['Low'], df['Close'].shift()
         return pd.concat([h-l_low, (h-c_prev).abs(), (l_low-c_prev).abs()], axis=1).max(axis=1).rolling(l).mean()
 
     @staticmethod
     def calc_pipeline(df):
-        """Main signal processing pipeline."""
-        
-        # 1. PHYSICS (CHEDO Entropy + Reynolds Oscillator)
+        # 1. PHYSICS (CHEDO Entropy + Reynolds)
         ret = np.log(df['Close'] / df['Close'].shift(1)).fillna(0)
         v = ret.rolling(50).std() / (np.abs(ret.rolling(50).mean()) + 1e-9)
         kappa = QuantumCore.tanh_clamp(np.log(np.abs(ret)*v + np.sqrt((np.abs(ret)*v)**2 + 1)).rolling(50).mean())
@@ -206,57 +198,127 @@ class QuantumCore:
             c, _ = np.histogram(x, bins=10)
             p = c[c>0]/c.sum()
             return -np.sum(p*np.log(p))
-            
+        
         ent = ret.rolling(50).apply(shannon, raw=True)
-        # CHEDO Index Calculation
         df['CHEDO'] = (2/(1+np.exp(-(0.4*kappa + 0.6*ent)*4)) - 1).rolling(3).mean()
 
         atr14 = QuantumCore.atr(df, 14)
-        # Reynolds Number (Market Turbulence)
         Re = (df['Volume'] * df['Close'].diff().abs() * atr14) / (df['Close'].rolling(252).std() + 1e-9)
         df['Reynolds'] = Re
         k_q = np.sqrt(np.maximum(0, df['Close'].rolling(252).std() - (df['Close']-df['Close'].shift(252)).abs()))/atr14
         df['Omega_Mag'] = (1/np.cosh(k_q)**2) * QuantumCore.tanh_clamp(Re/(Re.rolling(252).mean()+1e-9))
 
-        # 2. DARK VECTOR (Trend + Chop Logic)
-        hl2 = (df['High']+df['Low'])/2
+        # =========================================================
+        # 2. DARK VECTOR [SuperTrend Logic + Noise Gate]
+        # =========================================================
+        # SuperTrend Architecture (Trend Factor 4.0, ATR 10)
+        hl2 = (df['High'] + df['Low']) / 2
         matr = 4.0 * QuantumCore.atr(df, 10)
-        up, dn = hl2 + matr, hl2 - matr
-        st, d = np.zeros(len(df)), np.zeros(len(df))
+        
+        up = hl2 + matr
+        dn = hl2 - matr
+        
+        st = np.zeros(len(df)) # SuperTrend Line (Stop Loss)
+        d = np.zeros(len(df))  # Direction (1=Bull, -1=Bear)
+        
+        # Initialize
         st[0] = dn[0]
         d[0] = 1
-        vals, u_v, d_v = df['Close'].values, up.values, dn.values
+        
+        vals = df['Close'].values
+        u_v = up.values
+        d_v = dn.values
         
         for i in range(1, len(df)):
             if vals[i-1] > st[i-1]:
                 st[i] = max(d_v[i], st[i-1]) if vals[i] > st[i-1] else u_v[i]
                 d[i] = 1 if vals[i] > st[i-1] else -1
-                if vals[i] < d_v[i] and d[i-1] == 1: st[i], d[i] = u_v[i], -1
+                if vals[i] < d_v[i] and d[i-1] == 1: 
+                    st[i] = u_v[i]
+                    d[i] = -1
             else:
                 st[i] = min(u_v[i], st[i-1]) if vals[i] < st[i-1] else d_v[i]
                 d[i] = -1 if vals[i] < st[i-1] else 1
-                if vals[i] > u_v[i] and d[i-1] == -1: st[i], d[i] = d_v[i], 1
+                if vals[i] > u_v[i] and d[i-1] == -1: 
+                    st[i] = d_v[i]
+                    d[i] = 1
+                    
         df['Vector_Trend'] = d
-        
-        # Chop Index for Volatility Gate
-        df['Chop_Index'] = 100 * np.log10(QuantumCore.atr(df,1).rolling(14).sum() / (df['High'].rolling(14).max()-df['Low'].rolling(14).min()+1e-9)) / np.log10(14)
-        df['Vector_Locked'] = df['Chop_Index'] > 60
+        df['Dark_Vector_Stop'] = st # EXPLICIT TRAILING STOP COLUMN
 
-        # 3. MCM (Cloud System)
+        # Choppiness Index (Noise Gate)
+        # Log10(Sum(ATR, 14) / (MaxHigh - MinLow)) / Log10(14) * 100
+        atr1 = QuantumCore.atr(df, 1)
+        sum_atr = atr1.rolling(14).sum()
+        range_max_min = df['High'].rolling(14).max() - df['Low'].rolling(14).min()
+        
+        ci_num = np.log10(sum_atr / (range_max_min + 1e-9))
+        ci_denom = np.log10(14)
+        df['Chop_Index'] = 100 * ci_num / ci_denom
+        df['Vector_Locked'] = df['Chop_Index'] > 60 # Threshold 60
+
+        # =========================================================
+        # 3. APEX VECTOR [Flux + Efficiency]
+        # =========================================================
+        # Efficiency: Body / Range
+        range_abs = df['High'] - df['Low']
+        body_abs = (df['Close'] - df['Open']).abs()
+        raw_eff = np.where(range_abs == 0, 0.0, body_abs / range_abs)
+        efficiency = pd.Series(raw_eff).ewm(span=14, adjust=False).mean() # EMA 14
+        
+        # Volume Flux: Volume / SMA(Vol, 55)
+        vol_avg = df['Volume'].rolling(55).mean()
+        vol_fact = np.where(vol_avg == 0, 1.0, df['Volume'] / vol_avg)
+        
+        # Vector Calculation
+        direction_sign = np.sign(df['Close'] - df['Open'])
+        vector_raw = direction_sign * efficiency * vol_fact
+        
+        # Flux (Smoothing EMA 5)
+        df['Apex_Flux'] = pd.Series(vector_raw).ewm(span=5, adjust=False).mean()
+        
+        # Superconductor Logic
+        # > 0.6 = Super Bull, < -0.6 = Super Bear
+        # Abs < 0.3 = Resistive
+        df['Apex_State'] = np.where(df['Apex_Flux'] > 0.6, "SUPER_BULL",
+                           np.where(df['Apex_Flux'] < -0.6, "SUPER_BEAR",
+                           np.where(df['Apex_Flux'].abs() < 0.3, "RESISTIVE", "HEAT")))
+
+        # =========================================================
+        # 4. APEX DIVERGENCE ENGINE
+        # =========================================================
+        # We need pivots on Flux to compare with Price
+        lookback = 5
+        # Find local max/min indices using rolling window
+        flux_series = df['Apex_Flux']
+        price_high = df['High']
+        price_low = df['Low']
+        
+        # Simple pivot detection (equivalent to ta.pivothigh/low)
+        # We mark 1 where a pivot occurs
+        df['Piv_H_Flux'] = (flux_series == flux_series.rolling(window=lookback*2+1, center=True).max()).astype(int)
+        df['Piv_L_Flux'] = (flux_series == flux_series.rolling(window=lookback*2+1, center=True).min()).astype(int)
+        
+        # Divergence Logic (Simplified for Python vectorization)
+        # In a real streaming app, we'd iterate, but here we can check recent pivots
+        # For visualization, we will just pass the flux series for plotting
+        
+        # =========================================================
+        # 5. REMAINING INDICATORS (GANN, MCM, F&G)
+        # =========================================================
+        # MCM Cloud
         hma55 = QuantumCore.hma(df['Close'], 55)
         atr55 = QuantumCore.atr(df, 55)
         df['MCM_Upper'] = hma55 + atr55*1.5
         df['MCM_Lower'] = hma55 - atr55*1.5
         df['MCM_Trend'] = np.where(df['Close'] > df['MCM_Upper'], 1, np.where(df['Close'] < df['MCM_Lower'], -1, 0))
         df['MCM_Trend'] = df['MCM_Trend'].replace(to_replace=0, method='ffill')
-        df['MCM_Stop'] = np.where(df['MCM_Trend']==1, df['MCM_Lower'], df['MCM_Upper'])
-
-        # 4. GANN
+        
+        # Gann
         h_ma = df['High'].rolling(3).mean()
         l_ma = df['Low'].rolling(3).mean()
         act, gt = np.zeros(len(df)), np.zeros(len(df))
-        act[0] = l_ma[0]
-        gt[0] = 1
+        act[0] = l_ma[0]; gt[0] = 1
         hm_v, lm_v = h_ma.values, l_ma.values
         for i in range(1, len(df)):
             if gt[i-1] == 1:
@@ -266,20 +328,20 @@ class QuantumCore:
                 if vals[i] > act[i-1]: gt[i], act[i] = 1, lm_v[i]
                 else: gt[i], act[i] = -1, hm_v[i]
         df['Gann_Activator'], df['Gann_Trend'] = act, gt
-
-        # 5. F&G v4 (Sentiment)
+        
+        # F&G v4
         delta = df['Close'].diff()
         rsi = 100 - (100/(1+(delta.where(delta>0,0).ewm(alpha=1/14).mean()/(-delta.where(delta<0,0).ewm(alpha=1/14).mean()))))
         zs, zl = QuantumCore.zlema(df['Close'],50), QuantumCore.zlema(df['Close'],200)
         ts = np.where((df['Close']>zs)&(zs>zl), 75, np.where(df['Close']>zs, 60, np.where((df['Close']<zs)&(zs<zl), 25, 40)))
         df['FG_Index'] = (rsi*0.3 + ts*0.2 + 50*0.5).rolling(3).mean()
-
-        # 6. EXTRAS (SMC Pivots + Squeeze Momentum)
+        
+        # SMC & Squeeze
         df['Pivot_H'] = df['High'][(df['High'].shift(1)<df['High']) & (df['High'].shift(-1)<df['High'])]
         df['Pivot_L'] = df['Low'][(df['Low'].shift(1)>df['Low']) & (df['Low'].shift(-1)>df['Low'])]
         df['Sqz_Mom'] = df['Close'].rolling(20).apply(lambda y: linregress(np.arange(20), y)[0], raw=True) * 100
 
-        # 7. GOD MODE SCORE (Aggregated Signal)
+        # God Mode Score
         df['GM_Score'] = np.where(df['MCM_Trend']==1, 1, -1) + np.where(df['Gann_Trend']==1, 1, -1) + np.where(df['Vector_Trend']==1, 1, -1) + np.sign(df['Sqz_Mom'])
         
         return df.dropna()
@@ -297,19 +359,16 @@ class QuantumCore:
 
     @staticmethod
     def calc_vp(df, bins=70):
-        # 1. Setup Bins
         price_range = df['High'].max() - df['Low'].min()
         if price_range == 0: return None
         
         hist, bin_edges = np.histogram(df['Close'], bins=bins, weights=df['Volume'])
         bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
         
-        # 2. Find POC (Point of Control)
         max_idx = np.argmax(hist)
         poc_vol = hist[max_idx]
         poc_price = bin_centers[max_idx]
         
-        # 3. Calculate Value Area (70%)
         total_vol = np.sum(hist)
         target_vol = total_vol * 0.70
         current_vol = poc_vol
@@ -324,7 +383,6 @@ class QuantumCore:
             else:
                 current_vol += r_vol; r_idx += 1
                 
-        # 4. Pack Data
         return {
             "hist": hist,
             "bins": bin_centers,
@@ -358,7 +416,6 @@ class DataEngine:
     @staticmethod
     @st.cache_data(ttl=60)
     def fetch(ticker, timeframe):
-        # MAPPING
         p_map = {
             "15m": ("60d", "15m"), 
             "1h": ("730d", "1h"), 
@@ -369,22 +426,16 @@ class DataEngine:
         p, i = p_map.get(timeframe, ("1y", "1d"))
         
         try:
-            # FIX: Robust Column Flattening for YFinance
             df = yf.download(ticker, period=p, interval=i, progress=False)
             
-            # MultiIndex Handling (Critical for new YF versions)
             if isinstance(df.columns, pd.MultiIndex):
-                try:
-                    df.columns = df.columns.droplevel(1) 
-                except:
-                    df.columns = df.columns.get_level_values(0)
+                try: df.columns = df.columns.droplevel(1) 
+                except: df.columns = df.columns.get_level_values(0)
             
-            # Check for Empty Data
             if df.empty:
-                st.error(f"⚠️ YFinance returned no data for {ticker}. The symbol may be delisted or requires a suffix (e.g. .L, .NS).")
+                st.error(f"⚠️ YFinance returned no data for {ticker}.")
                 return None
             
-            # 4H Resampling
             if timeframe == "4h":
                 df = df.resample("4h").agg({
                     'Open':'first', 'High':'max', 'Low':'min', 'Close':'last', 'Volume':'sum'
@@ -398,29 +449,16 @@ class DataEngine:
 
     @staticmethod
     def get_macro_correlation(ticker, period="90d"):
-        """Fetches Macro Basket for Correlation"""
         basket = {
-            "Ticker": ticker,
-            "SPX": "SPY",
-            "NDX": "QQQ",
-            "BTC": "BTC-USD",
-            "DXY": "DX-Y.NYB",
-            "GOLD": "GC=F",
-            "VIX": "^VIX"
+            "Ticker": ticker, "SPX": "SPY", "NDX": "QQQ", 
+            "BTC": "BTC-USD", "DXY": "DX-Y.NYB", "GOLD": "GC=F", "VIX": "^VIX"
         }
         try:
             df = yf.download(list(basket.values()), period=period, interval="1d", progress=False)['Close']
-            
-            # Clean MultiIndex
             if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.droplevel(0)
-            
-            # Rename columns to friendly names
             rev_map = {v: k for k, v in basket.items()}
             df = df.rename(columns=rev_map)
-            
-            # Fill NaNs - UPDATED for Pandas deprecation
             df = df.ffill().bfill()
-            
             return df
         except: return None
 
@@ -437,32 +475,32 @@ class DataEngine:
 # 4. CHART RENDERING
 # ==========================================
 def render_charts(df, ticker, show_opt, vp_levels=None):
-    fig = make_subplots(rows=4, cols=1, shared_xaxes=True, row_heights=[0.5, 0.15, 0.15, 0.2], vertical_spacing=0.03, subplot_titles=("PRICE & SIGNALS", "SQUEEZE", "OMEGA", "ENTROPY"))
+    fig = make_subplots(rows=4, cols=1, shared_xaxes=True, row_heights=[0.5, 0.15, 0.15, 0.2], vertical_spacing=0.03, subplot_titles=("PRICE & DARK VECTOR STOP", "APEX FLUX VECTOR", "OMEGA", "ENTROPY"))
     
     # 1. Price
     fig.add_trace(go.Candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'], name="Price"), row=1, col=1)
     
+    # Dark Vector Trailing Stop (New)
+    fig.add_trace(go.Scatter(x=df.index, y=df['Dark_Vector_Stop'], mode='lines', line=dict(color='white', width=1, dash='dot'), name="DV Stop"), row=1, col=1)
+
     # Cloud Overlays
     if show_opt['clouds']:
         fig.add_trace(go.Scatter(x=df.index, y=df['MCM_Upper'], line=dict(width=0), showlegend=False), row=1, col=1)
         fig.add_trace(go.Scatter(x=df.index, y=df['MCM_Lower'], fill='tonexty', fillcolor='rgba(0, 229, 255, 0.1)', line=dict(width=0), name="Cloud"), row=1, col=1)
     
-    # Gann Overlay
     if show_opt['gann']:
         fig.add_trace(go.Scatter(x=df.index, y=df['Gann_Activator'], line=dict(color='#FFD700', dash='dot'), name="Gann"), row=1, col=1)
     
-    # SMC Overlay
     if show_opt['smc']:
         fig.add_trace(go.Scatter(x=df.index, y=df['Pivot_H'], mode='markers', marker=dict(symbol='triangle-down', color='red', size=8), name="Swing High"), row=1, col=1)
         fig.add_trace(go.Scatter(x=df.index, y=df['Pivot_L'], mode='markers', marker=dict(symbol='triangle-up', color='green', size=8), name="Swing Low"), row=1, col=1)
 
-    # VP LEVELS PROJECTION
     if vp_levels:
         fig.add_hline(y=vp_levels['poc'], line_dash="solid", line_color="#FF6D00", annotation_text="POC", row=1, col=1)
         fig.add_hline(y=vp_levels['vah'], line_dash="dot", line_color="#00E5FF", annotation_text="VAH", row=1, col=1)
         fig.add_hline(y=vp_levels['val'], line_dash="dot", line_color="#00E5FF", annotation_text="VAL", row=1, col=1)
 
-    # SIGNAL ARROWS
+    # Signal Arrows
     gm_flip = df['GM_Score'].diff()
     buy_sigs = df[ (df['GM_Score'] > 0) & (df['GM_Score'].shift(1) <= 0) ]
     sell_sigs = df[ (df['GM_Score'] < 0) & (df['GM_Score'].shift(1) >= 0) ]
@@ -472,9 +510,13 @@ def render_charts(df, ticker, show_opt, vp_levels=None):
     if not sell_sigs.empty:
         fig.add_trace(go.Scatter(x=sell_sigs.index, y=sell_sigs['High']*1.01, mode='markers', marker=dict(symbol='triangle-down', color='#FF1744', size=12), name="SELL SIG"), row=1, col=1)
 
-    # 2. Subplots
-    cols = ['#00E676' if v >= 0 else '#FF1744' for v in df['Sqz_Mom']]
-    fig.add_trace(go.Bar(x=df.index, y=df['Sqz_Mom'], marker_color=cols, name="Mom"), row=2, col=1)
+    # 2. Apex Flux Vector (New)
+    flux_cols = ['#00E676' if v > 0.6 else '#FF1744' if v < -0.6 else '#546E7A' for v in df['Apex_Flux']]
+    fig.add_trace(go.Bar(x=df.index, y=df['Apex_Flux'], marker_color=flux_cols, name="Flux"), row=2, col=1)
+    fig.add_hline(y=0.6, line_dash="dot", line_color="green", row=2, col=1)
+    fig.add_hline(y=-0.6, line_dash="dot", line_color="red", row=2, col=1)
+
+    # 3. Omega & Entropy
     fig.add_trace(go.Scatter(x=df.index, y=df['Omega_Mag'], fill='tozeroy', line=dict(color='#2979FF'), name="Omega"), row=3, col=1)
     fig.add_trace(go.Scatter(x=df.index, y=df['CHEDO'], line=dict(color='#EA80FC'), name="Entropy"), row=4, col=1)
     
@@ -482,27 +524,18 @@ def render_charts(df, ticker, show_opt, vp_levels=None):
     st.plotly_chart(fig, use_container_width=True)
 
 def render_mc(paths):
-    # Calculate Stats
     median_path = np.median(paths, axis=1)
-    p95 = np.percentile(paths, 95, axis=1) # Bull
-    p5 = np.percentile(paths, 5, axis=1)   # Bear
-    
-    # Return Stats
+    p95 = np.percentile(paths, 95, axis=1)
+    p5 = np.percentile(paths, 5, axis=1)
     start_p = paths[0,0]
     end_mean = np.mean(paths[-1, :])
     exp_ret = ((end_mean - start_p) / start_p) * 100
     
     fig = go.Figure()
-    
-    # 1. Background Chaos
     for i in range(min(50, paths.shape[1])): 
         fig.add_trace(go.Scatter(y=paths[:, i], mode='lines', line=dict(color='rgba(41, 121, 255, 0.05)', width=1), showlegend=False, hoverinfo='skip'))
-        
-    # 2. Confidence Interval
     fig.add_trace(go.Scatter(y=p95, mode='lines', line=dict(width=0), showlegend=False, hoverinfo='skip'))
     fig.add_trace(go.Scatter(y=p5, mode='lines', line=dict(width=0), fill='tonexty', fillcolor='rgba(0, 229, 255, 0.1)', name='90% Conf. Interval', hoverinfo='skip'))
-    
-    # 3. Key Lines
     fig.add_trace(go.Scatter(y=p95, mode='lines', line=dict(color='#00E676', width=1, dash='dot'), name=f'P95 (Bull): {p95[-1]:.2f}'))
     fig.add_trace(go.Scatter(y=p5, mode='lines', line=dict(color='#FF1744', width=1, dash='dot'), name=f'P5 (Bear): {p5[-1]:.2f}'))
     fig.add_trace(go.Scatter(y=median_path, mode='lines', line=dict(color='#FFFFFF', width=2), name=f'Median: {median_path[-1]:.2f}'))
@@ -517,23 +550,15 @@ def render_mc(paths):
 
 def render_vp(vp_data):
     if vp_data is None: return
-    
-    # Color Logic: Blue for Value Area, Grey for Outliers, Orange for POC
     colors = []
     for i in range(len(vp_data['hist'])):
-        if vp_data['bins'][i] == vp_data['poc']: colors.append('#FF6D00') # POC Orange
-        elif i in vp_data['va_indices']: colors.append('rgba(0, 229, 255, 0.6)') # VA Blue
-        else: colors.append('rgba(255, 255, 255, 0.1)') # Outlier Grey
+        if vp_data['bins'][i] == vp_data['poc']: colors.append('#FF6D00')
+        elif i in vp_data['va_indices']: colors.append('rgba(0, 229, 255, 0.6)')
+        else: colors.append('rgba(255, 255, 255, 0.1)')
         
     fig = go.Figure(go.Bar(
-        x=vp_data['hist'], 
-        y=vp_data['bins'], 
-        orientation='h', 
-        marker_color=colors,
-        name='Volume'
+        x=vp_data['hist'], y=vp_data['bins'], orientation='h', marker_color=colors, name='Volume'
     ))
-    
-    # Add POC/VA Lines
     fig.add_hrect(y0=vp_data['val'], y1=vp_data['vah'], fillcolor="rgba(0, 229, 255, 0.05)", line_width=0)
     fig.add_hline(y=vp_data['poc'], line_dash="solid", line_color="#FF6D00", annotation_text="POC", annotation_position="top right")
     fig.add_hline(y=vp_data['vah'], line_dash="dot", line_color="#00E5FF", annotation_text="VAH", annotation_position="bottom right")
@@ -549,96 +574,61 @@ def render_vp(vp_data):
     st.plotly_chart(fig, use_container_width=True)
 
 def render_physics_dashboard(df):
-    """Upgraded Physics/Entropy Visualization"""
-    # Create 3-pane dashboard
     fig = make_subplots(
         rows=2, cols=2, 
         specs=[[{"colspan": 2}, None], [{"type": "xy"}, {"type": "scatter"}]], 
         row_heights=[0.5, 0.5], 
         subplot_titles=("REYNOLDS OSCILLATOR (TURBULENCE)", "ENTROPY REGIME", "PHASE SPACE ATTRACTOR")
     )
-
-    # 1. Reynolds (Time Series)
     re_mean = df['Reynolds'].mean()
     fig.add_trace(go.Scatter(x=df.index, y=df['Reynolds'], mode='lines', name='Reynolds', line=dict(color='#2979FF', width=1.5), fill='tozeroy', fillcolor='rgba(41,121,255,0.1)'), row=1, col=1)
     fig.add_hline(y=re_mean, line_dash="dot", line_color="white", row=1, col=1)
     
-    # 2. Entropy (Heatmap Line)
-    # Color points based on Entropy level (Cyan=Order, Magenta=Chaos)
     c_map = ['#00E5FF' if v < 0.5 else '#EA80FC' for v in df['CHEDO']]
     fig.add_trace(go.Bar(x=df.index, y=df['CHEDO'], marker_color=c_map, name='Entropy Level'), row=2, col=1)
     fig.add_hline(y=0.5, line_dash="dash", line_color="#FF1744", annotation_text="CHAOS THRESHOLD", row=2, col=1)
 
-    # 3. Phase Space (Scatter: Entropy vs Volatility)
-    # Volatility proxy = standard deviation of returns
     vol = df['Close'].pct_change().rolling(20).std()
     fig.add_trace(go.Scatter(
-        x=df['CHEDO'].tail(200), 
-        y=vol.tail(200), 
-        mode='markers', 
-        marker=dict(
-            size=8, 
-            color=df.index[-200:].astype('int64'), # Color by time (recent = lighter)
-            colorscale='Viridis', 
-            showscale=False
-        ),
+        x=df['CHEDO'].tail(200), y=vol.tail(200), mode='markers', 
+        marker=dict(size=8, color=df.index[-200:].astype('int64'), colorscale='Viridis', showscale=False),
         name='Phase Space'
     ), row=2, col=2)
-    
     fig.update_xaxes(title_text="Entropy (CHEDO)", row=2, col=2)
     fig.update_yaxes(title_text="Volatility", row=2, col=2)
-
     fig.update_layout(height=700, template="plotly_dark", paper_bgcolor="#050505", plot_bgcolor="#050505", margin=dict(l=10, r=10, t=40, b=10))
     st.plotly_chart(fig, use_container_width=True)
 
 def render_macro_dashboard(ticker):
-    """Global Macro Intelligence Dashboard"""
-    
-    # 1. Fetch Data
     df_macro = DataEngine.get_macro_correlation(ticker)
-    
     if df_macro is None:
         st.error("Macro Data Unavailable")
         return
-
-    # 2. Correlation Matrix
     corr = df_macro.corr()
-    
-    # 3. Normalized Comparison Chart
     df_norm = df_macro / df_macro.iloc[0] * 100
-    
-    # 4. Regime Detection (VIX)
     last_vix = df_macro['VIX'].iloc[-1]
     regime = "RISK OFF (FEAR)" if last_vix > 20 else "RISK ON (GREED)"
     regime_col = "#FF1744" if last_vix > 20 else "#00E676"
 
-    # LAYOUT
     c1, c2 = st.columns([1, 2])
-    
     with c1:
         st.markdown(f"### 🌍 GLOBAL REGIME")
         st.markdown(f"<div style='background:{regime_col}; padding:15px; border-radius:10px; text-align:center; font-weight:bold; color:black;'>{regime}<br><span style='font-size:0.8em'>VIX: {last_vix:.2f}</span></div>", unsafe_allow_html=True)
-        
         st.markdown("### 🔗 CORRELATION MATRIX")
         fig_corr = px.imshow(corr, text_auto=".2f", color_continuous_scale="RdBu", template="plotly_dark", aspect="auto")
         fig_corr.update_layout(height=400)
         st.plotly_chart(fig_corr, use_container_width=True)
-
     with c2:
         st.markdown(f"### 🏎️ RELATIVE PERFORMANCE (90D)")
         fig_perf = go.Figure()
         colors = {"Ticker": "#00E5FF", "SPX": "#FFD700", "BTC": "#FF9100", "DXY": "#9E9E9E", "VIX": "#FF1744"}
-        
         for col in df_norm.columns:
-            if col == "GOLD": continue # Skip Gold to reduce clutter
+            if col == "GOLD": continue
             c = colors.get(col, "#FFFFFF")
             w = 3 if col == "Ticker" else 1
             fig_perf.add_trace(go.Scatter(x=df_norm.index, y=df_norm[col], mode='lines', name=col, line=dict(color=c, width=w)))
-            
         fig_perf.update_layout(template="plotly_dark", height=500, yaxis_title="% Return", paper_bgcolor="#050505", plot_bgcolor="#050505")
         st.plotly_chart(fig_perf, use_container_width=True)
-
-    # Seasonality
     st.markdown("### 📅 HISTORICAL SEASONALITY")
     hm = DataEngine.get_seasonality(ticker)
     if hm is not None:
@@ -651,7 +641,6 @@ def render_macro_dashboard(ticker):
 class Intelligence:
     @staticmethod
     def generate_strategy_prompt(ticker, timeframe, last, sc, vp_levels, reynolds):
-        # Build Context from Quant Data
         vp_txt = f"VAH: {vp_levels['vah']:.2f}, VAL: {vp_levels['val']:.2f}, POC: {vp_levels['poc']:.2f}" if vp_levels else "N/A"
         turb = "HIGH" if abs(reynolds) > 2 else "LOW"
         
@@ -664,9 +653,9 @@ class Intelligence:
         - God Mode Score: {sc}/4 ({'BULL' if sc>0 else 'BEAR'})
         - Entropy: {last['CHEDO']:.2f} (High>0.5 = Chaos)
         - Trend (MCM): {'BULL' if last['MCM_Trend']==1 else 'BEAR'}
-        - Turbulence (Reynolds): {turb} ({reynolds:.2f})
+        - Apex State: {last['Apex_State']} (Flux: {last['Apex_Flux']:.2f})
+        - Trailing Stop (Dark Vector): {last['Dark_Vector_Stop']:.2f}
         - Volatility Gate: {'LOCKED' if last['Vector_Locked'] else 'OPEN'}
-        - Sentiment: {last['FG_Index']:.0f}/100
 
         QUANT LEVELS (VOLUME PROFILE):
         {vp_txt}
@@ -683,13 +672,38 @@ class Intelligence:
     def construct_telegram_msg(template, ticker, timeframe, last, sc):
         base = f"🔥 *TITAN SIGNAL: {ticker}*\n"
         if template == "Scalp":
-            return base + f"⏱️ TF: {timeframe}\n💰 Price: {last['Close']:.2f}\n🚀 Momentum: {last['Sqz_Mom']:.1f}\n🛑 Stop: {last['MCM_Stop']:.2f}"
+            return base + f"⏱️ TF: {timeframe}\n💰 Price: {last['Close']:.2f}\n🚀 Momentum: {last['Sqz_Mom']:.1f}\n🛑 Stop (DV): {last['Dark_Vector_Stop']:.2f}"
         elif template == "Swing":
-            return base + f"🌊 Trend: {'BULL' if last['MCM_Trend']==1 else 'BEAR'}\n🎯 Score: {sc}/4\n🛡️ Stop: {last['MCM_Stop']:.2f}\n🔮 Entropy: {last['CHEDO']:.2f}"
+            return base + f"🌊 Trend: {'BULL' if last['MCM_Trend']==1 else 'BEAR'}\n🎯 Score: {sc}/4\n🛡️ Stop (DV): {last['Dark_Vector_Stop']:.2f}\n🔮 Entropy: {last['CHEDO']:.2f}"
         elif template == "Executive":
-            return base + f"📊 *EXECUTIVE BRIEF*\nPrice: {last['Close']:.2f}\nScore: {sc}\nSentiment: {last['FG_Index']}\nVol Lock: {last['Vector_Locked']}\nStop Ref: {last['MCM_Stop']:.2f}"
-        else: # Standard
-            return base + f"Price: {last['Close']:.2f}\nScore: {sc}\nStop: {last['MCM_Stop']:.2f}"
+            return base + f"📊 *EXECUTIVE BRIEF*\nPrice: {last['Close']:.2f}\nScore: {sc}\nApex: {last['Apex_State']}\nVol Lock: {last['Vector_Locked']}\nStop Ref: {last['Dark_Vector_Stop']:.2f}"
+        else:
+            return base + f"Price: {last['Close']:.2f}\nScore: {sc}\nStop: {last['Dark_Vector_Stop']:.2f}"
+
+    @staticmethod
+    def construct_outlook_msg(ticker, timeframe, last, sc):
+        # A broader market update, distinct from a trade signal
+        apex_state = last['Apex_State']
+        flux = last['Apex_Flux']
+        dv_stop = last['Dark_Vector_Stop']
+        
+        icon = "🟢" if sc > 0 else "🔴"
+        if last['Vector_Locked']: icon = "🔒"
+        
+        return f"""🌍 *TITAN MARKET OUTLOOK*
+{icon} *{ticker}* ({timeframe})
+
+*SYSTEM STATE:*
+• God Mode: {sc}/4
+• Apex Vector: {apex_state} ({flux:.2f})
+• Volatility: {'LOCKED (Chop)' if last['Vector_Locked'] else 'OPEN (Trend)'}
+
+*KEY LEVELS:*
+• Price: {last['Close']:.2f}
+• Trail Stop: {dv_stop:.2f}
+• Sentiment: {last['FG_Index']:.0f}/100
+
+_Generated by TITAN OMNI V2_"""
 
 # ==========================================
 # 6. MAIN EXECUTION
@@ -698,11 +712,8 @@ def main():
     inject_titan_css()
     keys, status = load_secrets()
     
-    # --- SIDEBAR CONTROL ---
     with st.sidebar:
         st.markdown("## 💠 TITAN CONTROL")
-        
-        # Categorized Dropdowns
         cat = st.selectbox("ASSET CLASS", ["Crypto", "Indices", "Forex", "Custom"])
         if cat == "Crypto": ticker = st.selectbox("TICKER", ["BTC-USD", "ETH-USD", "SOL-USD", "XRP-USD"])
         elif cat == "Indices": ticker = st.selectbox("TICKER", ["SPY", "QQQ", "IWM", "DIA"])
@@ -731,7 +742,6 @@ def main():
             
         if st.button("🚀 INITIATE SYSTEM"): st.session_state['run_analysis'] = True
 
-    # --- MAIN PAGE ---
     render_tv_widgets(ticker)
     st.markdown('<h1 class="titan-title">TITAN NEXUS</h1>', unsafe_allow_html=True)
     render_live_clock()
@@ -742,55 +752,44 @@ def main():
             if df is not None:
                 df = QuantumCore.calc_pipeline(df)
                 last = df.iloc[-1]
-                
-                # PRE-CALC VP FOR CHART PROJECTION
                 vp_data = QuantumCore.calc_vp(df)
                 
-                # METRICS
                 c1, c2, c3, c4, c5 = st.columns(5)
                 c1.metric("PRICE", f"{last['Close']:.2f}", f"{df['Close'].pct_change().iloc[-1]*100:.2f}%")
                 sc = last['GM_Score']
                 c2.metric("GOD MODE", f"{sc:.0f}/4", "STRONG" if abs(sc)>2 else "WEAK")
                 c3.metric("SENTIMENT", "GREED" if last['FG_Index']>60 else "FEAR", f"{last['FG_Index']:.0f}")
                 c4.metric("VECTOR", "LOCKED" if last['Vector_Locked'] else "OPEN", "CHOP" if last['Vector_Locked'] else "TREND")
-                c5.metric("ENTROPY", f"{last['CHEDO']:.2f}", "CHAOS" if last['CHEDO']>0.5 else "ORDER")
+                c5.metric("APEX FLUX", f"{last['Apex_Flux']:.2f}", last['Apex_State'])
                 
-                # TABS
                 t1, t2, t3, t4, t5 = st.tabs(["📈 CHART", "⚛️ PHYSICS", "🎲 QUANT", "🌍 MACRO", "🧠 AI & BROADCAST"])
                 
                 with t1:
                     render_charts(df, ticker, {"clouds":show_clouds, "gann":show_gann, "smc":show_smc}, vp_levels=vp_data)
                     render_mobile_card(last)
-                
                 with t2:
                     render_physics_dashboard(df)
-                    
                 with t3:
                     c1, c2 = st.columns(2)
                     with c1: render_mc(QuantumCore.run_monte_carlo(df))
                     with c2: render_vp(vp_data)
-                    
                     st.markdown("### ⚖️ RISK CALCULATOR")
-                    dist = abs(last['Close'] - last['MCM_Stop']) / last['Close']
+                    dist = abs(last['Close'] - last['Dark_Vector_Stop']) / last['Close'] # UPDATED TO DARK VECTOR STOP
                     sz = (acc_size * (risk_pct/100)) / (last['Close'] * dist) if dist > 0 else 0
                     r1, r2, r3 = st.columns(3)
-                    r1.metric("STOP LOSS", f"${last['MCM_Stop']:.2f}")
+                    r1.metric("STOP LOSS (DV)", f"${last['Dark_Vector_Stop']:.2f}")
                     r2.metric("POS SIZE", f"{sz:.4f}")
                     r3.metric("RISK VALUE", f"${acc_size*(risk_pct/100):.2f}")
-                    
                 with t4:
                     render_macro_dashboard(ticker)
-                        
                 with t5:
                     c1, c2 = st.columns(2)
                     with c1:
                         st.markdown("### 🧠 STRATEGIC INTEL")
                         if st.button("GENERATE NEURAL REPORT"):
-                            # Upgraded Prompt with full context
                             p = Intelligence.generate_strategy_prompt(ticker, timeframe, last, sc, vp_data, last['Reynolds'])
                             r = "NO KEYS"
                             
-                            # ROBUST SELF-HEALING AI LOGIC
                             gem_key = keys["gem"].strip()
                             if gem_key and genai:
                                 try:
@@ -801,38 +800,27 @@ def main():
                                             model = genai.GenerativeModel(m_name)
                                             r = model.generate_content(p).text
                                             if r: break
-                                        except Exception as e:
-                                            continue
-                                except Exception as e:
-                                    r = f"Gemini Error: {str(e)}"
+                                        except Exception as e: continue
+                                except Exception as e: r = f"Gemini Error: {str(e)}"
                             
-                            # OpenAI Fallback
                             oai_key = keys["oai"].strip()
                             if (r == "NO KEYS" or "Error" in r) and oai_key and OpenAI:
                                 try:
                                     client = OpenAI(api_key=oai_key)
-                                    response = client.chat.completions.create(
-                                        model="gpt-4", 
-                                        messages=[{"role":"user","content":p}]
-                                    )
+                                    response = client.chat.completions.create(model="gpt-4", messages=[{"role":"user","content":p}])
                                     r = response.choices[0].message.content
-                                except Exception as e:
-                                    r = f"OpenAI Error: {str(e)}"
+                                except Exception as e: r = f"OpenAI Error: {str(e)}"
                             
                             if r == "NO KEYS": r = "⚠️ AI Service Unavailable. Please check API Keys in sidebar."
-                            
                             st.session_state['ai_report'] = r
                         
-                        # Display Report from Session State
                         if st.session_state['ai_report']:
                             st.markdown(st.session_state['ai_report'])
                             
                     with c2:
                         st.markdown("### 📡 BROADCAST CENTER")
-                        # UPDATED: Added "AI Neural Report" to dropdown
                         tmpl = st.selectbox("SIGNAL TEMPLATE", ["Standard", "Scalp", "Swing", "Executive", "AI Neural Report"])
                         
-                        # UPDATED: Dynamic Message Generation includes AI Report
                         if tmpl == "AI Neural Report":
                              default_msg = st.session_state.get('ai_report', "⚠️ No Intelligence Report Generated. Please run the AI module first.")
                         else:
@@ -845,9 +833,20 @@ def main():
                                 try:
                                     requests.post(f"https://api.telegram.org/bot{keys['tg_t']}/sendMessage", json={"chat_id": keys['tg_c'], "text": msg, "parse_mode": "Markdown"})
                                     st.success("SIGNAL TRANSMITTED 🚀")
-                                except Exception as e:
-                                    st.error(f"Transmission Failed: {str(e)}")
+                                except Exception as e: st.error(f"Transmission Failed: {str(e)}")
                             else: st.error("NO TELEGRAM KEYS")
+                        
+                        # NEW BUTTON: MARKET OUTLOOK SNAPSHOT
+                        st.markdown("---")
+                        if st.button("📨 SEND MARKET OUTLOOK (SNAPSHOT)"):
+                            outlook_msg = Intelligence.construct_outlook_msg(ticker, timeframe, last, sc)
+                            if keys["tg_t"] and keys["tg_c"]:
+                                try:
+                                    requests.post(f"https://api.telegram.org/bot{keys['tg_t']}/sendMessage", json={"chat_id": keys['tg_c'], "text": outlook_msg, "parse_mode": "Markdown"})
+                                    st.success("OUTLOOK SENT 🌍")
+                                except Exception as e: st.error(f"Transmission Failed: {str(e)}")
+                            else: st.error("NO TELEGRAM KEYS")
+
             else: st.error("DATA ERROR")
 
 if __name__ == "__main__":
