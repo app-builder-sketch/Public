@@ -263,15 +263,22 @@ class QuantumCore:
         # Efficiency: Body / Range
         range_abs = df['High'] - df['Low']
         body_abs = (df['Close'] - df['Open']).abs()
+        
+        # FIX: Ensure result uses the Index
         raw_eff = np.where(range_abs == 0, 0.0, body_abs / range_abs)
-        efficiency = pd.Series(raw_eff).ewm(span=14, adjust=False).mean() # EMA 14
+        efficiency = pd.Series(raw_eff, index=df.index).ewm(span=14, adjust=False).mean() # Force Index
         
         # Volume Flux: Volume / SMA(Vol, 55)
         vol_avg = df['Volume'].rolling(55).mean()
-        vol_fact = np.where(vol_avg == 0, 1.0, df['Volume'] / vol_avg)
+        
+        # FIX: Ensure result uses the Index
+        vol_fact_vals = np.where(vol_avg == 0, 1.0, df['Volume'] / vol_avg)
+        vol_fact = pd.Series(vol_fact_vals, index=df.index)
         
         # Vector Calculation
         direction_sign = np.sign(df['Close'] - df['Open'])
+        
+        # NOTE: All operands now share the same index, preventing ValueError
         vector_raw = direction_sign * efficiency * vol_fact
         
         # Flux (Smoothing EMA 5)
