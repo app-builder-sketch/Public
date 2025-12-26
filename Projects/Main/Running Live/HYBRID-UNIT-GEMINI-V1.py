@@ -45,7 +45,7 @@ except ImportError:
 def inject_titan_css():
     st.markdown("""
     <style>
-        @import url('https://fonts.googleapis.com/css2?family=Rajdhani:wght@400;600;700&family=Roboto+Mono:wght@400;700&display=swap');
+        @import url('https://fonts.googleapis.com/css2?family=Rajdhani:wght@400;600;800&family=Roboto+Mono:wght@400;700&display=swap');
         
         /* THEME */
         .stApp { background-color: #050505; color: #e0e0e0; font-family: 'Rajdhani', sans-serif; }
@@ -391,7 +391,44 @@ def render_vp(vp):
     st.plotly_chart(fig, use_container_width=True)
 
 # ==========================================
-# 5. MAIN EXECUTION
+# 5. INTELLIGENCE & BROADCASTING
+# ==========================================
+class Intelligence:
+    @staticmethod
+    def generate_strategy_prompt(ticker, timeframe, last, sc):
+        return f"""
+        ACT AS A SENIOR QUANTITATIVE STRATEGIST.
+        ANALYZE: {ticker} ({timeframe})
+        PRICE: {last['Close']:.2f}
+
+        METRICS:
+        - God Mode Score: {sc}/4 ({'BULL' if sc>0 else 'BEAR'})
+        - Entropy: {last['CHEDO']:.2f} (High>0.5 = Chaos)
+        - Trend (MCM): {'BULL' if last['MCM_Trend']==1 else 'BEAR'}
+        - Volatility: {'LOCKED' if last['Vector_Locked'] else 'OPEN'}
+        - Sentiment: {last['FG_Index']:.0f}/100
+
+        OUTPUT:
+        1. Market Regime (Trend vs Chop).
+        2. Confluence Analysis.
+        3. Trade Plan (Entry, Stop Loss, Targets).
+        4. Key Risks.
+        """
+
+    @staticmethod
+    def construct_telegram_msg(template, ticker, timeframe, last, sc):
+        base = f"🔥 *TITAN SIGNAL: {ticker}*\n"
+        if template == "Scalp":
+            return base + f"⏱️ TF: {timeframe}\n💰 Price: {last['Close']:.2f}\n🚀 Momentum: {last['Sqz_Mom']:.1f}\n🛑 Stop: {last['MCM_Stop']:.2f}"
+        elif template == "Swing":
+            return base + f"🌊 Trend: {'BULL' if last['MCM_Trend']==1 else 'BEAR'}\n🎯 Score: {sc}/4\n🛡️ Stop: {last['MCM_Stop']:.2f}\n🔮 Entropy: {last['CHEDO']:.2f}"
+        elif template == "Executive":
+            return base + f"📊 *EXECUTIVE BRIEF*\nPrice: {last['Close']:.2f}\nScore: {sc}\nSentiment: {last['FG_Index']}\nVol Lock: {last['Vector_Locked']}\nStop Ref: {last['MCM_Stop']:.2f}"
+        else: # Standard
+            return base + f"Price: {last['Close']:.2f}\nScore: {sc}\nStop: {last['MCM_Stop']:.2f}"
+
+# ==========================================
+# 6. MAIN EXECUTION
 # ==========================================
 def main():
     inject_titan_css()
@@ -452,7 +489,7 @@ def main():
                 c5.metric("ENTROPY", f"{last['CHEDO']:.2f}", "CHAOS" if last['CHEDO']>0.5 else "ORDER")
                 
                 # TABS
-                t1, t2, t3, t4, t5 = st.tabs(["📈 CHART", "⚛️ PHYSICS", "🎲 QUANT", "🌍 MACRO", "🧠 AI"])
+                t1, t2, t3, t4, t5 = st.tabs(["📈 CHART", "⚛️ PHYSICS", "🎲 QUANT", "🌍 MACRO", "🧠 AI & BROADCAST"])
                 
                 with t1:
                     render_charts(df, ticker, {"clouds":show_clouds, "gann":show_gann, "smc":show_smc})
@@ -490,22 +527,21 @@ def main():
                 with t5:
                     c1, c2 = st.columns(2)
                     with c1:
-                        st.markdown("### 🧠 NEURAL ANALYSIS")
-                        if st.button("GENERATE REPORT"):
-                            p = f"Analyze {ticker}. Price {last['Close']}. Score {sc}. Entropy {last['CHEDO']}."
+                        st.markdown("### 🧠 STRATEGIC INTEL")
+                        if st.button("GENERATE STRATEGY REPORT"):
+                            p = Intelligence.generate_strategy_prompt(ticker, timeframe, last, sc)
                             r = "NO KEYS"
                             
                             # ROBUST SELF-HEALING AI LOGIC
                             if keys["gem"] and genai:
                                 genai.configure(api_key=keys["gem"])
-                                # Fallback sequence
                                 models = ['gemini-1.5-flash', 'gemini-1.5-pro', 'gemini-1.0-pro', 'gemini-pro']
                                 for m_name in models:
                                     try:
                                         r = genai.GenerativeModel(m_name).generate_content(p).text
                                         break
                                     except: continue
-                                if r == "NO KEYS": r = "⚠️ AI Service Unavailable. Check API Keys/Region."
+                                if r == "NO KEYS": r = "⚠️ AI Service Unavailable. Check API Keys."
                                 
                             elif keys["oai"] and OpenAI:
                                 r = OpenAI(api_key=keys["oai"]).chat.completions.create(model="gpt-4", messages=[{"role":"user","content":p}]).choices[0].message.content
@@ -513,11 +549,16 @@ def main():
                             st.markdown(r)
                             
                     with c2:
-                        st.markdown("### 📡 BROADCAST")
-                        msg = st.text_area("MSG", f"🔥 {ticker} SIGNAL\nScore: {sc}\nPrice: {last['Close']}")
+                        st.markdown("### 📡 BROADCAST CENTER")
+                        tmpl = st.selectbox("SIGNAL TEMPLATE", ["Standard", "Scalp", "Swing", "Executive"])
+                        
+                        # Dynamic Message Generation
+                        default_msg = Intelligence.construct_telegram_msg(tmpl, ticker, timeframe, last, sc)
+                        msg = st.text_area("PAYLOAD PREVIEW", default_msg, height=150)
+                        
                         if st.button("SEND TELEGRAM"):
                             if keys["tg_t"] and keys["tg_c"]:
-                                requests.post(f"https://api.telegram.org/bot{keys['tg_t']}/sendMessage", json={"chat_id": keys['tg_c'], "text": msg})
+                                requests.post(f"https://api.telegram.org/bot{keys['tg_t']}/sendMessage", json={"chat_id": keys['tg_c'], "text": msg, "parse_mode": "Markdown"})
                                 st.success("SENT")
                             else: st.error("NO TELEGRAM KEYS")
             else: st.error("DATA ERROR")
