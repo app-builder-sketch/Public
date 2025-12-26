@@ -87,6 +87,7 @@ def inject_axiom_css(is_mobile):
         
         /* INPUT FIELDS */
         .stTextInput > div > div > input { color: #00F0FF; background-color: #111; border: 1px solid #333; }
+        .stTextArea > div > div > textarea { background-color: #0a0a0a; color: #00F0FF; border: 1px solid #333; font-family: 'Roboto Mono'; }
     </style>
     """
     
@@ -427,12 +428,68 @@ class Intelligence:
             return ""
 
     @staticmethod
+    def generate_signal_report(df, ticker):
+        """Generates a rich, emoji-dense report based on Physics indicators."""
+        last = df.iloc[-1]
+        
+        # Trend Logic
+        is_bull = last['Trend_Dir'] == 1
+        trend_emoji = "🐂 BULLISH" if is_bull else "🐻 BEARISH"
+        
+        # Flux Logic
+        flux_val = last['Apex_Flux']
+        flux_state = last['Apex_State']
+        flux_emoji = "🟢 Superconductor" if abs(flux_val) > 0.6 else "⚪ Neutral"
+        
+        # Entropy Logic
+        chedo_val = last['CHEDO']
+        entropy_status = "⚠️ CRITICAL CHAOS" if abs(chedo_val) > 0.8 else "✅ Stable State"
+        
+        # Support/Resistance (Pivots)
+        try:
+            res_zone = df[df['Pivot_H']]['High'].iloc[-1]
+            sup_zone = df[df['Pivot_L']]['Low'].iloc[-1]
+        except:
+            res_zone, sup_zone = 0.0, 0.0
+
+        report = f"""🚨 *AXIOM SIGNAL REPORT* 🚨
+📅 {datetime.now().strftime('%Y-%m-%d %H:%M UTC')}
+💎 Asset: *{ticker}*
+💰 Price: *${last['Close']:,.2f}*
+
+🌊 *MARKET STRUCTURE*
+• Trend: {trend_emoji}
+• Baseline (HMA): ${last['HMA_Trend']:,.2f}
+• Nearest Resistance: ${res_zone:,.2f}
+• Nearest Support: ${sup_zone:,.2f}
+
+⚛️ *QUANTUM PHYSICS*
+• Flux Vector: {flux_emoji} ({flux_val:.2f})
+• Entropy (CHEDO): {entropy_status} ({chedo_val:.2f})
+• Relativity (RQZO): {last['RQZO']:.2f}
+
+🛡️ *STRATEGIC OUTLOOK*
+Regime: {"High-Energy" if abs(last['RQZO']) > 1 else "Low-Energy"} {trend_emoji.split()[1]}
+Action: {"Monitor Breakout" if abs(flux_val) > 0.6 else "Wait for Vector Alignment"}
+"""
+        return report
+
+    @staticmethod
     def analyze(df, ticker, api_key):
         if not api_key:
             return "❌ Missing OpenAI API Key. Please enter it in the Sidebar."
         
         last = df.iloc[-1]
         
+        # Get Pivot Levels for context (Support/Resistance)
+        try:
+            p_highs = df[df['Pivot_H']]['High'].tail(3).values
+            p_lows = df[df['Pivot_L']]['Low'].tail(3).values
+            res_str = ", ".join([f"{x:.2f}" for x in p_highs]) if len(p_highs) > 0 else "None nearby"
+            sup_str = ", ".join([f"{x:.2f}" for x in p_lows]) if len(p_lows) > 0 else "None nearby"
+        except:
+            res_str, sup_str = "Calculating...", "Calculating..."
+
         # GPT-5.2 OPTIMIZATION: Advanced Chain-of-Thought System Prompt
         system_prompt = """
         You are 'Axiom', a Tier-1 Quantitative Physicist and Trading Systems Architect.
@@ -442,6 +499,7 @@ class Intelligence:
         1. CHEDO (Entropy): Measures system chaos. >0.8 is Max Entropy (Reversal Imminent). <-0.8 is Negentropy (Trend Lock).
         2. RQZO (Relativity): Measures time-dilation volatility. High Amplitude = High Energy/Instability.
         3. Apex Flux (Vector): Measures 'Superconductivity'. >0.6 means price moves with zero resistance (Super Bull).
+        4. SMC (Structure): Defines Market Structure via HMA and Pivot levels.
         
         OUTPUT FORMAT (Markdown):
         ### ⚛️ Quantum State Assessment
@@ -449,21 +507,31 @@ class Intelligence:
         **Vector**: [Aligned/Divergent]
         
         ### 🛡️ Risk Physics
-        *Analyze the interaction between RQZO Volatility and CHEDO Entropy.*
+        *Analyze the interaction between RQZO Volatility and CHEDO Entropy. If both are high, warn of chaotic breakage.*
         
-        ### 🚀 Execution Protocol
-        *Provide a precise trading plan (Entry/Stop/Target) based on Market Structure (SMC).*
+        ### 🚀 Strategy Options
+        Provide 3 Distinct Execution Protocols based on current Structure:
+        1. **Aggressive**: (e.g. Momentum Breakout if Flux > 0.6)
+        2. **Conservative**: (e.g. Pullback to SMC HMA)
+        3. **Contrarian**: (e.g. Fade Max Entropy > 0.8)
+        
+        *Include concrete Entry, Stop Loss (use Pivot levels), and Take Profit zones.*
         """
         
         user_prompt = f"""
         ASSET: {ticker}
         PRICE: {last['Close']:.2f}
         
+        --- MARKET STRUCTURE ---
+        Resistance Zones (Recent Highs): {res_str}
+        Support Zones (Recent Lows): {sup_str}
+        Trend Baseline (HMA): {last['HMA_Trend']:.2f}
+        
         --- QUANTUM METRICS ---
         CHEDO (Entropy): {last['CHEDO']:.3f}
         RQZO (Relativity): {last['RQZO']:.3f}
         APEX FLUX (Vector): {last['Apex_Flux']:.3f} [{last['Apex_State']}]
-        TREND (SMC): {"BULLISH" if last['Trend_Dir']==1 else "BEARISH"} (HMA Base: {last['HMA_Trend']:.2f})
+        TREND DIR: {"BULLISH" if last['Trend_Dir']==1 else "BEARISH"}
         """
         
         try:
@@ -485,14 +553,15 @@ class Intelligence:
         url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
         
         try:
-            max_len = 2000
+            # Markdown parsing for rich text
+            max_len = 4000
             if len(message) <= max_len:
-                requests.post(url, json={"chat_id": chat_id, "text": message})
+                requests.post(url, json={"chat_id": chat_id, "text": message, "parse_mode": "Markdown"})
             else:
                 for i in range(0, len(message), max_len):
                     chunk = message[i:i+max_len]
-                    requests.post(url, json={"chat_id": chat_id, "text": f"(Part {i//max_len+1}) {chunk}"})
-            return True, "✅ Broadcast Sent"
+                    requests.post(url, json={"chat_id": chat_id, "text": chunk, "parse_mode": "Markdown"})
+            return True, "✅ Signal Broadcast Successfully"
         except Exception as e:
             return False, f"❌ Broadcast Failed: {str(e)}"
 
@@ -645,8 +714,13 @@ def main():
         st.components.v1.html(html, height=h)
 
     with t4:
-        msg = st.text_area("Payload", f"AXIOM: {ticker}\nFlux: {last['Apex_State']}\nEntropy: {last['CHEDO']:.2f}")
-        if st.button("🚀 Broadcast", use_container_width=is_mobile):
+        # AUTO-GENERATE DETAILED REPORT
+        default_report = Intelligence.generate_signal_report(df, ticker)
+        
+        st.markdown("### 📡 Quantum Signal Broadcaster")
+        msg = st.text_area("Signal Payload (Editable)", value=default_report, height=300)
+        
+        if st.button("🚀 Send Detailed Report", use_container_width=is_mobile):
             success, info = Intelligence.broadcast_telegram(msg, tg_token, tg_chat)
             if success: st.success(info)
             else: st.error(info)
