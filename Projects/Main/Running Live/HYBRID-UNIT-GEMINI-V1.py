@@ -225,31 +225,14 @@ class QuantumCore:
     @staticmethod
     def calc_standard_indicators(df):
         # SMA
-        df['SMA_20'] = df['Close'].rolling(window=20).mean()
         df['SMA_50'] = df['Close'].rolling(window=50).mean()
         df['SMA_200'] = df['Close'].rolling(window=200).mean()
         
-        # EMA
-        df['EMA_12'] = df['Close'].ewm(span=12, adjust=False).mean()
-        df['EMA_26'] = df['Close'].ewm(span=26, adjust=False).mean()
-        
         # Bollinger Bands
-        df['BB_Mid'] = df['SMA_20']
+        df['BB_Mid'] = df['Close'].rolling(window=20).mean()
         df['BB_Std'] = df['Close'].rolling(window=20).std()
         df['BB_Up'] = df['BB_Mid'] + (2 * df['BB_Std'])
         df['BB_Low'] = df['BB_Mid'] - (2 * df['BB_Std'])
-        
-        # MACD
-        df['MACD'] = df['EMA_12'] - df['EMA_26']
-        df['MACD_Signal'] = df['MACD'].ewm(span=9, adjust=False).mean()
-        df['MACD_Hist'] = df['MACD'] - df['MACD_Signal']
-        
-        # RSI
-        delta = df['Close'].diff()
-        gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
-        loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
-        rs = gain / (loss + 1e-9)
-        df['RSI'] = 100 - (100 / (1 + rs))
         
         return df
 
