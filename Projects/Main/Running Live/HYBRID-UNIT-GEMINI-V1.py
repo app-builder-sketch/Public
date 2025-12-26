@@ -265,9 +265,43 @@ class QuantumCore:
         return paths
 
     @staticmethod
-    def calc_vp(df):
-        bins = np.linspace(df['Low'].min(), df['High'].max(), 50)
-        return df.groupby(pd.cut(df['Close'], bins=bins))['Volume'].sum()
+    def calc_vp(df, bins=70):
+        # 1. Setup Bins
+        price_range = df['High'].max() - df['Low'].min()
+        if price_range == 0: return None
+        
+        hist, bin_edges = np.histogram(df['Close'], bins=bins, weights=df['Volume'])
+        bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
+        
+        # 2. Find POC (Point of Control)
+        max_idx = np.argmax(hist)
+        poc_vol = hist[max_idx]
+        poc_price = bin_centers[max_idx]
+        
+        # 3. Calculate Value Area (70%)
+        total_vol = np.sum(hist)
+        target_vol = total_vol * 0.70
+        current_vol = poc_vol
+        l_idx, r_idx = max_idx, max_idx
+        
+        while current_vol < target_vol:
+            l_vol = hist[l_idx-1] if l_idx > 0 else 0
+            r_vol = hist[r_idx+1] if r_idx < len(hist)-1 else 0
+            if l_vol == 0 and r_vol == 0: break
+            if l_vol > r_vol:
+                current_vol += l_vol; l_idx -= 1
+            else:
+                current_vol += r_vol; r_idx += 1
+                
+        # 4. Pack Data
+        return {
+            "hist": hist,
+            "bins": bin_centers,
+            "poc": poc_price,
+            "vah": bin_edges[r_idx+1],
+            "val": bin_edges[l_idx],
+            "va_indices": list(range(l_idx, r_idx+1))
+        }
 
 # ==========================================
 # 3. DATA ENGINE & CREDENTIALS
@@ -329,19 +363,32 @@ class DataEngine:
             return None
 
     @staticmethod
-    def get_macro():
-        t = {"SPX": "SPY", "NDX": "QQQ", "BTC": "BTC-USD", "VIX": "^VIX"}
+    def get_macro_correlation(ticker, period="90d"):
+        """Fetches Macro Basket for Correlation"""
+        basket = {
+            "Ticker": ticker,
+            "SPX": "SPY",
+            "NDX": "QQQ",
+            "BTC": "BTC-USD",
+            "DXY": "DX-Y.NYB",
+            "GOLD": "GC=F",
+            "VIX": "^VIX"
+        }
         try:
-            d = yf.download(list(t.values()), period="5d", interval="1d", group_by='ticker', progress=False)
-            res = {}
-            for k,v in t.items():
-                try:
-                    df = d[v]
-                    if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.droplevel(0)
-                    res[k] = (df['Close'].iloc[-1], df['Close'].pct_change().iloc[-1]*100)
-                except: pass
-            return res
-        except: return {}
+            df = yf.download(list(basket.values()), period=period, interval="1d", progress=False)['Close']
+            
+            # Clean MultiIndex
+            if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.droplevel(0)
+            
+            # Rename columns to friendly names
+            rev_map = {v: k for k, v in basket.items()}
+            df = df.rename(columns=rev_map)
+            
+            # Fill NaNs
+            df = df.fillna(method='ffill').fillna(method='bfill')
+            
+            return df
+        except: return None
 
     @staticmethod
     def get_seasonality(ticker):
@@ -355,19 +402,41 @@ class DataEngine:
 # ==========================================
 # 4. CHART RENDERING
 # ==========================================
-def render_charts(df, ticker, show_opt):
-    fig = make_subplots(rows=4, cols=1, shared_xaxes=True, row_heights=[0.5, 0.15, 0.15, 0.2], vertical_spacing=0.03, subplot_titles=("PRICE", "SQUEEZE", "OMEGA", "ENTROPY"))
+def render_charts(df, ticker, show_opt, vp_levels=None):
+    fig = make_subplots(rows=4, cols=1, shared_xaxes=True, row_heights=[0.5, 0.15, 0.15, 0.2], vertical_spacing=0.03, subplot_titles=("PRICE & SIGNALS", "SQUEEZE", "OMEGA", "ENTROPY"))
     
     # 1. Price
     fig.add_trace(go.Candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'], name="Price"), row=1, col=1)
+    
+    # Cloud Overlays
     if show_opt['clouds']:
         fig.add_trace(go.Scatter(x=df.index, y=df['MCM_Upper'], line=dict(width=0), showlegend=False), row=1, col=1)
         fig.add_trace(go.Scatter(x=df.index, y=df['MCM_Lower'], fill='tonexty', fillcolor='rgba(0, 229, 255, 0.1)', line=dict(width=0), name="Cloud"), row=1, col=1)
+    
+    # Gann Overlay
     if show_opt['gann']:
         fig.add_trace(go.Scatter(x=df.index, y=df['Gann_Activator'], line=dict(color='#FFD700', dash='dot'), name="Gann"), row=1, col=1)
+    
+    # SMC Overlay
     if show_opt['smc']:
-        fig.add_trace(go.Scatter(x=df.index, y=df['Pivot_H'], mode='markers', marker=dict(symbol='triangle-down', color='red', size=6), name="Swing High"), row=1, col=1)
-        fig.add_trace(go.Scatter(x=df.index, y=df['Pivot_L'], mode='markers', marker=dict(symbol='triangle-up', color='green', size=6), name="Swing Low"), row=1, col=1)
+        fig.add_trace(go.Scatter(x=df.index, y=df['Pivot_H'], mode='markers', marker=dict(symbol='triangle-down', color='red', size=8), name="Swing High"), row=1, col=1)
+        fig.add_trace(go.Scatter(x=df.index, y=df['Pivot_L'], mode='markers', marker=dict(symbol='triangle-up', color='green', size=8), name="Swing Low"), row=1, col=1)
+
+    # --- UPGRADE: VP LEVELS PROJECTION ---
+    if vp_levels:
+        fig.add_hline(y=vp_levels['poc'], line_dash="solid", line_color="#FF6D00", annotation_text="POC", row=1, col=1)
+        fig.add_hline(y=vp_levels['vah'], line_dash="dot", line_color="#00E5FF", annotation_text="VAH", row=1, col=1)
+        fig.add_hline(y=vp_levels['val'], line_dash="dot", line_color="#00E5FF", annotation_text="VAL", row=1, col=1)
+
+    # --- UPGRADE: SIGNAL ARROWS (God Mode Flip) ---
+    gm_flip = df['GM_Score'].diff()
+    buy_sigs = df[ (df['GM_Score'] > 0) & (df['GM_Score'].shift(1) <= 0) ]
+    sell_sigs = df[ (df['GM_Score'] < 0) & (df['GM_Score'].shift(1) >= 0) ]
+    
+    if not buy_sigs.empty:
+        fig.add_trace(go.Scatter(x=buy_sigs.index, y=buy_sigs['Low']*0.99, mode='markers', marker=dict(symbol='triangle-up', color='#00E676', size=12), name="BUY SIG"), row=1, col=1)
+    if not sell_sigs.empty:
+        fig.add_trace(go.Scatter(x=sell_sigs.index, y=sell_sigs['High']*1.01, mode='markers', marker=dict(symbol='triangle-down', color='#FF1744', size=12), name="SELL SIG"), row=1, col=1)
 
     # 2. Subplots
     cols = ['#00E676' if v >= 0 else '#FF1744' for v in df['Sqz_Mom']]
@@ -379,40 +448,201 @@ def render_charts(df, ticker, show_opt):
     st.plotly_chart(fig, use_container_width=True)
 
 def render_mc(paths):
+    # Calculate Stats
+    median_path = np.median(paths, axis=1)
+    p95 = np.percentile(paths, 95, axis=1) # Bull
+    p5 = np.percentile(paths, 5, axis=1)   # Bear
+    
+    # Return Stats
+    start_p = paths[0,0]
+    end_mean = np.mean(paths[-1, :])
+    exp_ret = ((end_mean - start_p) / start_p) * 100
+    
     fig = go.Figure()
-    for i in range(min(30, paths.shape[1])): fig.add_trace(go.Scatter(y=paths[:, i], mode='lines', line=dict(color='rgba(0,229,255,0.1)'), showlegend=False))
-    fig.add_trace(go.Scatter(y=np.mean(paths, axis=1), mode='lines', line=dict(color='#00E676', width=3), name="Mean"))
-    fig.update_layout(title="Monte Carlo (30D)", template="plotly_dark", height=400, paper_bgcolor="#050505")
+    
+    # 1. Background Chaos (Limit to 50 paths for performance)
+    for i in range(min(50, paths.shape[1])): 
+        fig.add_trace(go.Scatter(y=paths[:, i], mode='lines', line=dict(color='rgba(41, 121, 255, 0.05)', width=1), showlegend=False, hoverinfo='skip'))
+        
+    # 2. Confidence Interval (Cloud)
+    fig.add_trace(go.Scatter(y=p95, mode='lines', line=dict(width=0), showlegend=False, hoverinfo='skip'))
+    fig.add_trace(go.Scatter(y=p5, mode='lines', line=dict(width=0), fill='tonexty', fillcolor='rgba(0, 229, 255, 0.1)', name='90% Conf. Interval', hoverinfo='skip'))
+    
+    # 3. Key Lines
+    fig.add_trace(go.Scatter(y=p95, mode='lines', line=dict(color='#00E676', width=1, dash='dot'), name=f'P95 (Bull): {p95[-1]:.2f}'))
+    fig.add_trace(go.Scatter(y=p5, mode='lines', line=dict(color='#FF1744', width=1, dash='dot'), name=f'P5 (Bear): {p5[-1]:.2f}'))
+    fig.add_trace(go.Scatter(y=median_path, mode='lines', line=dict(color='#FFFFFF', width=2), name=f'Median: {median_path[-1]:.2f}'))
+    
+    fig.update_layout(
+        title=dict(text=f"MONTE CARLO (30D) | Exp. Return: {exp_ret:.2f}%", font=dict(family="Rajdhani", size=20, color="#00E5FF")),
+        template="plotly_dark", height=450, paper_bgcolor="#050505", plot_bgcolor="#050505",
+        margin=dict(l=10, r=10, t=40, b=10), hovermode="x unified",
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+    )
     st.plotly_chart(fig, use_container_width=True)
 
-def render_vp(vp):
-    fig = go.Figure(go.Bar(x=vp.values, y=[i.mid for i in vp.index], orientation='h', marker_color='rgba(41,121,255,0.5)'))
-    fig.update_layout(title="Volume Profile", template="plotly_dark", height=400, paper_bgcolor="#050505")
+def render_vp(vp_data):
+    if vp_data is None: return
+    
+    # Color Logic: Blue for Value Area, Grey for Outliers, Orange for POC
+    colors = []
+    for i in range(len(vp_data['hist'])):
+        if vp_data['bins'][i] == vp_data['poc']: colors.append('#FF6D00') # POC Orange
+        elif i in vp_data['va_indices']: colors.append('rgba(0, 229, 255, 0.6)') # VA Blue
+        else: colors.append('rgba(255, 255, 255, 0.1)') # Outlier Grey
+        
+    fig = go.Figure(go.Bar(
+        x=vp_data['hist'], 
+        y=vp_data['bins'], 
+        orientation='h', 
+        marker_color=colors,
+        name='Volume'
+    ))
+    
+    # Add POC/VA Lines
+    fig.add_hrect(y0=vp_data['val'], y1=vp_data['vah'], fillcolor="rgba(0, 229, 255, 0.05)", line_width=0)
+    fig.add_hline(y=vp_data['poc'], line_dash="solid", line_color="#FF6D00", annotation_text="POC", annotation_position="top right")
+    fig.add_hline(y=vp_data['vah'], line_dash="dot", line_color="#00E5FF", annotation_text="VAH", annotation_position="bottom right")
+    fig.add_hline(y=vp_data['val'], line_dash="dot", line_color="#00E5FF", annotation_text="VAL", annotation_position="top right")
+
+    fig.update_layout(
+        title=dict(text="VOLUME PROFILE (TPO)", font=dict(family="Rajdhani", size=20, color="#00E5FF")),
+        template="plotly_dark", height=500, paper_bgcolor="#050505", plot_bgcolor="#050505",
+        margin=dict(l=10, r=10, t=40, b=10), showlegend=False,
+        xaxis=dict(showgrid=False, visible=False),
+        yaxis=dict(showgrid=True, gridcolor='#222')
+    )
     st.plotly_chart(fig, use_container_width=True)
+
+def render_physics_dashboard(df):
+    """Upgraded Physics/Entropy Visualization"""
+    # Create 3-pane dashboard
+    fig = make_subplots(
+        rows=2, cols=2, 
+        specs=[[{"colspan": 2}, None], [{"type": "xy"}, {"type": "scatter"}]], 
+        row_heights=[0.5, 0.5], 
+        subplot_titles=("REYNOLDS OSCILLATOR (TURBULENCE)", "ENTROPY REGIME", "PHASE SPACE ATTRACTOR")
+    )
+
+    # 1. Reynolds (Time Series)
+    re_mean = df['Reynolds'].mean()
+    fig.add_trace(go.Scatter(x=df.index, y=df['Reynolds'], mode='lines', name='Reynolds', line=dict(color='#2979FF', width=1.5), fill='tozeroy', fillcolor='rgba(41,121,255,0.1)'), row=1, col=1)
+    fig.add_hline(y=re_mean, line_dash="dot", line_color="white", row=1, col=1)
+    
+    # 2. Entropy (Heatmap Line)
+    # Color points based on Entropy level (Cyan=Order, Magenta=Chaos)
+    c_map = ['#00E5FF' if v < 0.5 else '#EA80FC' for v in df['CHEDO']]
+    fig.add_trace(go.Bar(x=df.index, y=df['CHEDO'], marker_color=c_map, name='Entropy Level'), row=2, col=1)
+    fig.add_hline(y=0.5, line_dash="dash", line_color="#FF1744", annotation_text="CHAOS THRESHOLD", row=2, col=1)
+
+    # 3. Phase Space (Scatter: Entropy vs Volatility)
+    # Volatility proxy = standard deviation of returns
+    vol = df['Close'].pct_change().rolling(20).std()
+    fig.add_trace(go.Scatter(
+        x=df['CHEDO'].tail(200), 
+        y=vol.tail(200), 
+        mode='markers', 
+        marker=dict(
+            size=8, 
+            color=df.index[-200:].astype('int64'), # Color by time (recent = lighter)
+            colorscale='Viridis', 
+            showscale=False
+        ),
+        name='Phase Space'
+    ), row=2, col=2)
+    
+    fig.update_xaxes(title_text="Entropy (CHEDO)", row=2, col=2)
+    fig.update_yaxes(title_text="Volatility", row=2, col=2)
+
+    fig.update_layout(height=700, template="plotly_dark", paper_bgcolor="#050505", plot_bgcolor="#050505", margin=dict(l=10, r=10, t=40, b=10))
+    st.plotly_chart(fig, use_container_width=True)
+
+def render_macro_dashboard(ticker):
+    """NEW: Global Macro Intelligence Dashboard"""
+    
+    # 1. Fetch Data
+    df_macro = DataEngine.get_macro_correlation(ticker)
+    
+    if df_macro is None:
+        st.error("Macro Data Unavailable")
+        return
+
+    # 2. Correlation Matrix
+    corr = df_macro.corr()
+    
+    # 3. Normalized Comparison Chart
+    df_norm = df_macro / df_macro.iloc[0] * 100
+    
+    # 4. Regime Detection (VIX)
+    last_vix = df_macro['VIX'].iloc[-1]
+    regime = "RISK OFF (FEAR)" if last_vix > 20 else "RISK ON (GREED)"
+    regime_col = "#FF1744" if last_vix > 20 else "#00E676"
+
+    # LAYOUT
+    c1, c2 = st.columns([1, 2])
+    
+    with c1:
+        st.markdown(f"### 🌍 GLOBAL REGIME")
+        st.markdown(f"<div style='background:{regime_col}; padding:15px; border-radius:10px; text-align:center; font-weight:bold; color:black;'>{regime}<br><span style='font-size:0.8em'>VIX: {last_vix:.2f}</span></div>", unsafe_allow_html=True)
+        
+        st.markdown("### 🔗 CORRELATION MATRIX")
+        fig_corr = px.imshow(corr, text_auto=".2f", color_continuous_scale="RdBu", template="plotly_dark", aspect="auto")
+        fig_corr.update_layout(height=400)
+        st.plotly_chart(fig_corr, use_container_width=True)
+
+    with c2:
+        st.markdown(f"### 🏎️ RELATIVE PERFORMANCE (90D)")
+        fig_perf = go.Figure()
+        colors = {"Ticker": "#00E5FF", "SPX": "#FFD700", "BTC": "#FF9100", "DXY": "#9E9E9E", "VIX": "#FF1744"}
+        
+        for col in df_norm.columns:
+            if col == "GOLD": continue # Skip Gold to reduce clutter
+            c = colors.get(col, "#FFFFFF")
+            w = 3 if col == "Ticker" else 1
+            fig_perf.add_trace(go.Scatter(x=df_norm.index, y=df_norm[col], mode='lines', name=col, line=dict(color=c, width=w)))
+            
+        fig_perf.update_layout(template="plotly_dark", height=500, yaxis_title="% Return", paper_bgcolor="#050505", plot_bgcolor="#050505")
+        st.plotly_chart(fig_perf, use_container_width=True)
+
+    # Seasonality (Existing)
+    st.markdown("### 📅 HISTORICAL SEASONALITY")
+    hm = DataEngine.get_seasonality(ticker)
+    if hm is not None:
+        fig_hm = px.imshow(hm, color_continuous_scale='RdYlGn', text_auto='.1f', template="plotly_dark", aspect="auto")
+        st.plotly_chart(fig_hm, use_container_width=True)
 
 # ==========================================
 # 5. INTELLIGENCE & BROADCASTING
 # ==========================================
 class Intelligence:
     @staticmethod
-    def generate_strategy_prompt(ticker, timeframe, last, sc):
+    def generate_strategy_prompt(ticker, timeframe, last, sc, vp_levels, reynolds):
+        # Build Context from Quant Data
+        vp_txt = f"VAH: {vp_levels['vah']:.2f}, VAL: {vp_levels['val']:.2f}, POC: {vp_levels['poc']:.2f}" if vp_levels else "N/A"
+        turb = "HIGH" if abs(reynolds) > 2 else "LOW"
+        
         return f"""
-        ACT AS A SENIOR QUANTITATIVE STRATEGIST.
+        ACT AS A SENIOR QUANTITATIVE HEDGE FUND MANAGER.
         ANALYZE: {ticker} ({timeframe})
         PRICE: {last['Close']:.2f}
 
-        METRICS:
+        SYSTEM METRICS:
         - God Mode Score: {sc}/4 ({'BULL' if sc>0 else 'BEAR'})
         - Entropy: {last['CHEDO']:.2f} (High>0.5 = Chaos)
         - Trend (MCM): {'BULL' if last['MCM_Trend']==1 else 'BEAR'}
-        - Volatility: {'LOCKED' if last['Vector_Locked'] else 'OPEN'}
+        - Turbulence (Reynolds): {turb} ({reynolds:.2f})
+        - Volatility Gate: {'LOCKED' if last['Vector_Locked'] else 'OPEN'}
         - Sentiment: {last['FG_Index']:.0f}/100
 
-        OUTPUT:
-        1. Market Regime (Trend vs Chop).
-        2. Confluence Analysis.
-        3. Trade Plan (Entry, Stop Loss, Targets).
-        4. Key Risks.
+        QUANT LEVELS (VOLUME PROFILE):
+        {vp_txt}
+
+        MISSION:
+        Provide a concise, military-grade strategic assessment.
+        1. REGIME IDENTIFICATION: (Trending, Mean Reverting, or Chaos?)
+        2. KEY LEVELS: Use the VP levels (VAH/VAL) to define buy/sell zones.
+        3. EXECUTION PLAN: Define clear Entry, Stop, and Target.
+        4. MACRO CHECK: Briefly mention if this setup aligns with a Risk-On or Risk-Off environment.
         """
 
     @staticmethod
@@ -479,6 +709,9 @@ def main():
                 df = QuantumCore.calc_pipeline(df)
                 last = df.iloc[-1]
                 
+                # PRE-CALC VP FOR CHART PROJECTION
+                vp_data = QuantumCore.calc_vp(df)
+                
                 # METRICS
                 c1, c2, c3, c4, c5 = st.columns(5)
                 c1.metric("PRICE", f"{last['Close']:.2f}", f"{df['Close'].pct_change().iloc[-1]*100:.2f}%")
@@ -492,18 +725,16 @@ def main():
                 t1, t2, t3, t4, t5 = st.tabs(["📈 CHART", "⚛️ PHYSICS", "🎲 QUANT", "🌍 MACRO", "🧠 AI & BROADCAST"])
                 
                 with t1:
-                    render_charts(df, ticker, {"clouds":show_clouds, "gann":show_gann, "smc":show_smc})
+                    render_charts(df, ticker, {"clouds":show_clouds, "gann":show_gann, "smc":show_smc}, vp_levels=vp_data)
                     render_mobile_card(last)
                 
                 with t2:
-                    c1, c2 = st.columns(2)
-                    with c1: st.line_chart(df['Reynolds'].tail(100))
-                    with c2: st.line_chart(df['CHEDO'].tail(100))
+                    render_physics_dashboard(df)
                     
                 with t3:
                     c1, c2 = st.columns(2)
                     with c1: render_mc(QuantumCore.run_monte_carlo(df))
-                    with c2: render_vp(QuantumCore.calc_vp(df))
+                    with c2: render_vp(vp_data)
                     
                     st.markdown("### ⚖️ RISK CALCULATOR")
                     dist = abs(last['Close'] - last['MCM_Stop']) / last['Close']
@@ -514,22 +745,15 @@ def main():
                     r3.metric("RISK VALUE", f"${acc_size*(risk_pct/100):.2f}")
                     
                 with t4:
-                    md = DataEngine.get_macro()
-                    mc = st.columns(len(md))
-                    for i, (k,v) in enumerate(md.items()): mc[i].metric(k, f"{v[0]:.2f}", f"{v[1]:.2f}%")
-                    
-                    st.markdown("### 📅 SEASONALITY")
-                    hm = DataEngine.get_seasonality(ticker)
-                    if hm is not None:
-                        fig_hm = px.imshow(hm, color_continuous_scale='RdYlGn', text_auto='.1f', template="plotly_dark")
-                        st.plotly_chart(fig_hm, use_container_width=True)
+                    render_macro_dashboard(ticker)
                         
                 with t5:
                     c1, c2 = st.columns(2)
                     with c1:
                         st.markdown("### 🧠 STRATEGIC INTEL")
-                        if st.button("GENERATE STRATEGY REPORT"):
-                            p = Intelligence.generate_strategy_prompt(ticker, timeframe, last, sc)
+                        if st.button("GENERATE NEURAL REPORT"):
+                            # Upgraded Prompt with full context
+                            p = Intelligence.generate_strategy_prompt(ticker, timeframe, last, sc, vp_data, last['Reynolds'])
                             r = "NO KEYS"
                             
                             # ROBUST SELF-HEALING AI LOGIC
