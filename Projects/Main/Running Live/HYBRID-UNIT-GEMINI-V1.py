@@ -211,109 +211,83 @@ class QuantumCore:
         # =========================================================
         # 2. DARK VECTOR [SuperTrend Logic + Noise Gate]
         # =========================================================
-        # SuperTrend Architecture (Trend Factor 4.0, ATR 10)
         hl2 = (df['High'] + df['Low']) / 2
         matr = 4.0 * QuantumCore.atr(df, 10)
-        
         up = hl2 + matr
         dn = hl2 - matr
         
-        st = np.zeros(len(df)) # SuperTrend Line (Stop Loss)
-        d = np.zeros(len(df))  # Direction (1=Bull, -1=Bear)
+        st = np.zeros(len(df)) # SuperTrend Line
+        d = np.zeros(len(df))  # Direction
+        st[0] = dn[0]; d[0] = 1
         
-        # Initialize
-        st[0] = dn[0]
-        d[0] = 1
-        
-        vals = df['Close'].values
-        u_v = up.values
-        d_v = dn.values
+        vals = df['Close'].values; u_v = up.values; d_v = dn.values
         
         for i in range(1, len(df)):
             if vals[i-1] > st[i-1]:
                 st[i] = max(d_v[i], st[i-1]) if vals[i] > st[i-1] else u_v[i]
                 d[i] = 1 if vals[i] > st[i-1] else -1
-                if vals[i] < d_v[i] and d[i-1] == 1: 
-                    st[i] = u_v[i]
-                    d[i] = -1
+                if vals[i] < d_v[i] and d[i-1] == 1: st[i] = u_v[i]; d[i] = -1
             else:
                 st[i] = min(u_v[i], st[i-1]) if vals[i] < st[i-1] else d_v[i]
                 d[i] = -1 if vals[i] < st[i-1] else 1
-                if vals[i] > u_v[i] and d[i-1] == -1: 
-                    st[i] = d_v[i]
-                    d[i] = 1
+                if vals[i] > u_v[i] and d[i-1] == -1: st[i] = d_v[i]; d[i] = 1
                     
         df['Vector_Trend'] = d
-        df['Dark_Vector_Stop'] = st # EXPLICIT TRAILING STOP COLUMN
+        df['Dark_Vector_Stop'] = st 
 
-        # Choppiness Index (Noise Gate)
-        # Log10(Sum(ATR, 14) / (MaxHigh - MinLow)) / Log10(14) * 100
+        # Choppiness Index
         atr1 = QuantumCore.atr(df, 1)
         sum_atr = atr1.rolling(14).sum()
         range_max_min = df['High'].rolling(14).max() - df['Low'].rolling(14).min()
-        
         ci_num = np.log10(sum_atr / (range_max_min + 1e-9))
         ci_denom = np.log10(14)
         df['Chop_Index'] = 100 * ci_num / ci_denom
-        df['Vector_Locked'] = df['Chop_Index'] > 60 # Threshold 60
+        df['Vector_Locked'] = df['Chop_Index'] > 60
 
         # =========================================================
-        # 3. APEX VECTOR [Flux + Efficiency]
+        # 3. APEX VECTOR [Flux + Efficiency] & NEW METRICS
         # =========================================================
-        # Efficiency: Body / Range
         range_abs = df['High'] - df['Low']
         body_abs = (df['Close'] - df['Open']).abs()
         
-        # FIX: Ensure result uses the Index
+        # EFFICIENCY & VOL FLUX
         raw_eff = np.where(range_abs == 0, 0.0, body_abs / range_abs)
-        efficiency = pd.Series(raw_eff, index=df.index).ewm(span=14, adjust=False).mean() # Force Index
+        efficiency = pd.Series(raw_eff, index=df.index).ewm(span=14, adjust=False).mean()
         
-        # Volume Flux: Volume / SMA(Vol, 55)
         vol_avg = df['Volume'].rolling(55).mean()
-        
-        # FIX: Ensure result uses the Index
         vol_fact_vals = np.where(vol_avg == 0, 1.0, df['Volume'] / vol_avg)
         vol_fact = pd.Series(vol_fact_vals, index=df.index)
         
+        # **NEW: RVOL (Explicit for Signal)**
+        df['RVOL'] = vol_fact 
+        
+        # **NEW: VWAP Calculation**
+        vwap_num = (df['Volume'] * (df['High'] + df['Low'] + df['Close']) / 3).cumsum()
+        vwap_den = df['Volume'].cumsum()
+        df['VWAP'] = vwap_num / vwap_den
+        
+        # **NEW: Money Flow Index (MFI)**
+        typ_price = (df['High'] + df['Low'] + df['Close']) / 3
+        raw_money_flow = typ_price * df['Volume']
+        pos_flow = np.where(typ_price > typ_price.shift(1), raw_money_flow, 0)
+        neg_flow = np.where(typ_price < typ_price.shift(1), raw_money_flow, 0)
+        pos_mf = pd.Series(pos_flow, index=df.index).rolling(14).sum()
+        neg_mf = pd.Series(neg_flow, index=df.index).rolling(14).sum()
+        mfi_ratio = pos_mf / (neg_mf + 1e-9)
+        df['MFI'] = 100 - (100 / (1 + mfi_ratio))
+
         # Vector Calculation
         direction_sign = np.sign(df['Close'] - df['Open'])
-        
-        # NOTE: All operands now share the same index, preventing ValueError
         vector_raw = direction_sign * efficiency * vol_fact
-        
-        # Flux (Smoothing EMA 5)
         df['Apex_Flux'] = pd.Series(vector_raw).ewm(span=5, adjust=False).mean()
         
-        # Superconductor Logic
-        # > 0.6 = Super Bull, < -0.6 = Super Bear
-        # Abs < 0.3 = Resistive
         df['Apex_State'] = np.where(df['Apex_Flux'] > 0.6, "SUPER_BULL",
                            np.where(df['Apex_Flux'] < -0.6, "SUPER_BEAR",
                            np.where(df['Apex_Flux'].abs() < 0.3, "RESISTIVE", "HEAT")))
 
         # =========================================================
-        # 4. APEX DIVERGENCE ENGINE
+        # 4. REMAINING INDICATORS
         # =========================================================
-        # We need pivots on Flux to compare with Price
-        lookback = 5
-        # Find local max/min indices using rolling window
-        flux_series = df['Apex_Flux']
-        price_high = df['High']
-        price_low = df['Low']
-        
-        # Simple pivot detection (equivalent to ta.pivothigh/low)
-        # We mark 1 where a pivot occurs
-        df['Piv_H_Flux'] = (flux_series == flux_series.rolling(window=lookback*2+1, center=True).max()).astype(int)
-        df['Piv_L_Flux'] = (flux_series == flux_series.rolling(window=lookback*2+1, center=True).min()).astype(int)
-        
-        # Divergence Logic (Simplified for Python vectorization)
-        # In a real streaming app, we'd iterate, but here we can check recent pivots
-        # For visualization, we will just pass the flux series for plotting
-        
-        # =========================================================
-        # 5. REMAINING INDICATORS (GANN, MCM, F&G)
-        # =========================================================
-        # MCM Cloud
         hma55 = QuantumCore.hma(df['Close'], 55)
         atr55 = QuantumCore.atr(df, 55)
         df['MCM_Upper'] = hma55 + atr55*1.5
@@ -321,9 +295,7 @@ class QuantumCore:
         df['MCM_Trend'] = np.where(df['Close'] > df['MCM_Upper'], 1, np.where(df['Close'] < df['MCM_Lower'], -1, 0))
         df['MCM_Trend'] = df['MCM_Trend'].replace(to_replace=0, method='ffill')
         
-        # Gann
-        h_ma = df['High'].rolling(3).mean()
-        l_ma = df['Low'].rolling(3).mean()
+        h_ma = df['High'].rolling(3).mean(); l_ma = df['Low'].rolling(3).mean()
         act, gt = np.zeros(len(df)), np.zeros(len(df))
         act[0] = l_ma[0]; gt[0] = 1
         hm_v, lm_v = h_ma.values, l_ma.values
@@ -336,19 +308,16 @@ class QuantumCore:
                 else: gt[i], act[i] = -1, hm_v[i]
         df['Gann_Activator'], df['Gann_Trend'] = act, gt
         
-        # F&G v4
         delta = df['Close'].diff()
         rsi = 100 - (100/(1+(delta.where(delta>0,0).ewm(alpha=1/14).mean()/(-delta.where(delta<0,0).ewm(alpha=1/14).mean()))))
         zs, zl = QuantumCore.zlema(df['Close'],50), QuantumCore.zlema(df['Close'],200)
         ts = np.where((df['Close']>zs)&(zs>zl), 75, np.where(df['Close']>zs, 60, np.where((df['Close']<zs)&(zs<zl), 25, 40)))
         df['FG_Index'] = (rsi*0.3 + ts*0.2 + 50*0.5).rolling(3).mean()
         
-        # SMC & Squeeze
         df['Pivot_H'] = df['High'][(df['High'].shift(1)<df['High']) & (df['High'].shift(-1)<df['High'])]
         df['Pivot_L'] = df['Low'][(df['Low'].shift(1)>df['Low']) & (df['Low'].shift(-1)>df['Low'])]
         df['Sqz_Mom'] = df['Close'].rolling(20).apply(lambda y: linregress(np.arange(20), y)[0], raw=True) * 100
 
-        # God Mode Score
         df['GM_Score'] = np.where(df['MCM_Trend']==1, 1, -1) + np.where(df['Gann_Trend']==1, 1, -1) + np.where(df['Vector_Trend']==1, 1, -1) + np.sign(df['Sqz_Mom'])
         
         return df.dropna()
@@ -677,16 +646,50 @@ class Intelligence:
 
     @staticmethod
     def construct_telegram_msg(template, ticker, timeframe, last, sc):
-        base = f"🔥 *TITAN SIGNAL: {ticker}*\n"
-        # ENSURE STOP (DV) IS IN ALL TEMPLATES AS REQUESTED
-        if template == "Scalp":
-            return base + f"⏱️ TF: {timeframe}\n💰 Price: {last['Close']:.2f}\n🚀 Momentum: {last['Sqz_Mom']:.1f}\n🛑 Stop (DV): {last['Dark_Vector_Stop']:.2f}\n🌊 Flux: {last['Apex_Flux']:.2f}"
-        elif template == "Swing":
-            return base + f"🌊 Trend: {'BULL' if last['MCM_Trend']==1 else 'BEAR'}\n🎯 Score: {sc}/4\n🛡️ Stop (DV): {last['Dark_Vector_Stop']:.2f}\n🔮 Entropy: {last['CHEDO']:.2f}\n⚡ Flux: {last['Apex_Flux']:.2f}"
-        elif template == "Executive":
-            return base + f"📊 *EXECUTIVE BRIEF*\nPrice: {last['Close']:.2f}\nScore: {sc}\nApex: {last['Apex_State']}\nVol Lock: {last['Vector_Locked']}\nStop Ref: {last['Dark_Vector_Stop']:.2f}"
-        else: # Standard
-            return base + f"Price: {last['Close']:.2f}\nScore: {sc}\nStop (DV): {last['Dark_Vector_Stop']:.2f}\nFlux: {last['Apex_Flux']:.2f}"
+        # 1. Base Variables
+        price = last['Close']
+        stop = last['Dark_Vector_Stop']
+        
+        # 2. TP Calculations (Risk Based)
+        risk = abs(price - stop)
+        
+        # Direction
+        is_bull = sc > 0 or (sc == 0 and last['Vector_Trend'] == 1)
+        direction_icon = "🐂 LONG" if is_bull else "🐻 SHORT"
+        
+        tp1 = price + (risk * 1.5) if is_bull else price - (risk * 1.5)
+        tp2 = price + (risk * 3.0) if is_bull else price - (risk * 3.0)
+        tp3 = price + (risk * 5.0) if is_bull else price - (risk * 5.0)
+        
+        # 3. Confidence Mapping
+        conf = "HIGH" if abs(sc) >= 3 else ("MID" if abs(sc) == 2 else "LOW")
+        
+        # 4. Squeeze Status
+        sqz = "⚠️ SQUEEZE DETECTED" if last['Sqz_Mom'] == 0 else "⚪ NO SQUEEZE"
+        
+        # 5. VWAP Relation
+        vwap_rel = "Above" if price > last['VWAP'] else "Below"
+        
+        # 6. Construct Full Message
+        msg = f"""SIGNAL: {direction_icon}
+
+Confidence: {conf}
+Sentiment: {last['FG_Index']:.0f}/100
+Squeeze: {sqz}
+
+🌊 FLOW & VOL
+RVOL: {last['RVOL']:.2f}
+Money Flow: {last['MFI']:.2f}
+VWAP Relation: {vwap_rel}
+
+🎯 EXECUTION PLAN
+Entry: {price:.4f}
+🛑 SMART STOP: {stop:.4f}
+1️⃣ TP1 (1.5R): {tp1:.4f}
+2️⃣ TP2 (3.0R): {tp2:.4f}
+3️⃣ TP3 (5.0R): {tp3:.4f}"""
+
+        return msg
 
     @staticmethod
     def construct_outlook_msg(ticker, timeframe, last, sc):
