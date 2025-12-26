@@ -1,4 +1,3 @@
-
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -495,13 +494,24 @@ def main():
                         if st.button("GENERATE REPORT"):
                             p = f"Analyze {ticker}. Price {last['Close']}. Score {sc}. Entropy {last['CHEDO']}."
                             r = "NO KEYS"
+                            
+                            # ROBUST SELF-HEALING AI LOGIC
                             if keys["gem"] and genai:
                                 genai.configure(api_key=keys["gem"])
-                                # FIX: Use latest Gemini Flash model for speed/stability
-                                r = genai.GenerativeModel('gemini-1.5-flash').generate_content(p).text
+                                # Fallback sequence
+                                models = ['gemini-1.5-flash', 'gemini-1.5-pro', 'gemini-1.0-pro', 'gemini-pro']
+                                for m_name in models:
+                                    try:
+                                        r = genai.GenerativeModel(m_name).generate_content(p).text
+                                        break
+                                    except: continue
+                                if r == "NO KEYS": r = "⚠️ AI Service Unavailable. Check API Keys/Region."
+                                
                             elif keys["oai"] and OpenAI:
                                 r = OpenAI(api_key=keys["oai"]).chat.completions.create(model="gpt-4", messages=[{"role":"user","content":p}]).choices[0].message.content
+                            
                             st.markdown(r)
+                            
                     with c2:
                         st.markdown("### 📡 BROADCAST")
                         msg = st.text_area("MSG", f"🔥 {ticker} SIGNAL\nScore: {sc}\nPrice: {last['Close']}")
