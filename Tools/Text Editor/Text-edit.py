@@ -10,7 +10,7 @@ from typing import Dict, Any, List, Optional
 # =============================================================================
 
 # 'centered' layout reads better on phones than 'wide'
-st.set_page_config(page_title="Apex Mobile", page_icon="📱", layout="centered")
+st.set_page_config(page_title="Text to .txt- Mobile", page_icon="📱", layout="centered")
 
 # ----------------------------
 # Helpers
