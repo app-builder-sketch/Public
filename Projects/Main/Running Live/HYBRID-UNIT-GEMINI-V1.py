@@ -466,7 +466,11 @@ def main():
                             r = "NO KEYS"
                             if keys["gem"] and genai:
                                 genai.configure(api_key=keys["gem"])
-                                r = genai.GenerativeModel('gemini-pro').generate_content(p).text
+                                try:
+                                    model = genai.GenerativeModel('gemini-1.5-flash') # Newer, faster model
+                                    r = model.generate_content(p).text
+                                except Exception as e:
+                                    r = f"AI Error: {str(e)}"
                             elif keys["oai"] and OpenAI:
                                 r = OpenAI(api_key=keys["oai"]).chat.completions.create(model="gpt-4", messages=[{"role":"user","content":p}]).choices[0].message.content
                             st.markdown(r)
