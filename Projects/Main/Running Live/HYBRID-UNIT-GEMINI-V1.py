@@ -23,8 +23,9 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Persistent State
+# Persistent State Initialization
 if 'run_analysis' not in st.session_state: st.session_state['run_analysis'] = False
+if 'ai_report' not in st.session_state: st.session_state['ai_report'] = ""
 
 # --- LIBRARY CHECKS ---
 try:
@@ -143,7 +144,6 @@ def render_tv_widgets(symbol):
     components.html(tape, height=50)
 
 def render_mobile_card(last):
-    """Restored Mobile Summary"""
     sc = last['GM_Score']
     s_cls = "bull" if sc > 0 else "bear" if sc < 0 else ""
     html = f"""
@@ -161,73 +161,102 @@ def render_mobile_card(last):
 # 2. QUANTUM MATH KERNEL (FULL LOGIC)
 # ==========================================
 class QuantumCore:
+    """
+    The mathematical engine containing all indicator logic.
+    No code omitted.
+    """
+    
     @staticmethod
-    def tanh_clamp(x): return (np.exp(2.0 * np.clip(x, -20.0, 20.0)) - 1.0) / (np.exp(2.0 * np.clip(x, -20.0, 20.0)) + 1.0)
+    def tanh_clamp(x): 
+        # Clamps values to avoid overflow in exp, then applies tanh
+        return (np.exp(2.0 * np.clip(x, -20.0, 20.0)) - 1.0) / (np.exp(2.0 * np.clip(x, -20.0, 20.0)) + 1.0)
     
     @staticmethod
     def wma(s, l): 
+        # Weighted Moving Average
         w = np.arange(1, l + 1)
         return s.rolling(l).apply(lambda x: np.dot(x, w) / w.sum(), raw=True)
 
     @staticmethod
     def hma(s, l):
+        # Hull Moving Average
         return QuantumCore.wma(2 * QuantumCore.wma(s, int(l/2)) - QuantumCore.wma(s, l), int(np.sqrt(l)))
 
     @staticmethod
     def zlema(s, l):
+        # Zero Lag EMA
         return (s + (s - s.shift(int((l-1)/2)))).ewm(span=l, adjust=False).mean()
 
     @staticmethod
     def atr(df, l=14):
+        # Average True Range
         h, l_low, c_prev = df['High'], df['Low'], df['Close'].shift()
         return pd.concat([h-l_low, (h-c_prev).abs(), (l_low-c_prev).abs()], axis=1).max(axis=1).rolling(l).mean()
 
     @staticmethod
     def calc_pipeline(df):
-        # 1. PHYSICS (CHEDO + OMEGA)
+        """Main signal processing pipeline."""
+        
+        # 1. PHYSICS (CHEDO Entropy + Reynolds Oscillator)
         ret = np.log(df['Close'] / df['Close'].shift(1)).fillna(0)
         v = ret.rolling(50).std() / (np.abs(ret.rolling(50).mean()) + 1e-9)
         kappa = QuantumCore.tanh_clamp(np.log(np.abs(ret)*v + np.sqrt((np.abs(ret)*v)**2 + 1)).rolling(50).mean())
         
         def shannon(x): 
-            c, _ = np.histogram(x, bins=10); p = c[c>0]/c.sum(); return -np.sum(p*np.log(p))
+            c, _ = np.histogram(x, bins=10)
+            p = c[c>0]/c.sum()
+            return -np.sum(p*np.log(p))
+            
         ent = ret.rolling(50).apply(shannon, raw=True)
+        # CHEDO Index Calculation
         df['CHEDO'] = (2/(1+np.exp(-(0.4*kappa + 0.6*ent)*4)) - 1).rolling(3).mean()
 
         atr14 = QuantumCore.atr(df, 14)
+        # Reynolds Number (Market Turbulence)
         Re = (df['Volume'] * df['Close'].diff().abs() * atr14) / (df['Close'].rolling(252).std() + 1e-9)
         df['Reynolds'] = Re
         k_q = np.sqrt(np.maximum(0, df['Close'].rolling(252).std() - (df['Close']-df['Close'].shift(252)).abs()))/atr14
         df['Omega_Mag'] = (1/np.cosh(k_q)**2) * QuantumCore.tanh_clamp(Re/(Re.rolling(252).mean()+1e-9))
 
-        # 2. DARK VECTOR (Trend + Chop)
-        hl2 = (df['High']+df['Low'])/2; matr = 4.0 * QuantumCore.atr(df, 10)
+        # 2. DARK VECTOR (Trend + Chop Logic)
+        hl2 = (df['High']+df['Low'])/2
+        matr = 4.0 * QuantumCore.atr(df, 10)
         up, dn = hl2 + matr, hl2 - matr
-        st, d = np.zeros(len(df)), np.zeros(len(df)); st[0] = dn[0]; d[0] = 1
+        st, d = np.zeros(len(df)), np.zeros(len(df))
+        st[0] = dn[0]
+        d[0] = 1
         vals, u_v, d_v = df['Close'].values, up.values, dn.values
         
         for i in range(1, len(df)):
             if vals[i-1] > st[i-1]:
-                st[i] = max(d_v[i], st[i-1]) if vals[i] > st[i-1] else u_v[i]; d[i] = 1 if vals[i] > st[i-1] else -1
+                st[i] = max(d_v[i], st[i-1]) if vals[i] > st[i-1] else u_v[i]
+                d[i] = 1 if vals[i] > st[i-1] else -1
                 if vals[i] < d_v[i] and d[i-1] == 1: st[i], d[i] = u_v[i], -1
             else:
-                st[i] = min(u_v[i], st[i-1]) if vals[i] < st[i-1] else d_v[i]; d[i] = -1 if vals[i] < st[i-1] else 1
+                st[i] = min(u_v[i], st[i-1]) if vals[i] < st[i-1] else d_v[i]
+                d[i] = -1 if vals[i] < st[i-1] else 1
                 if vals[i] > u_v[i] and d[i-1] == -1: st[i], d[i] = d_v[i], 1
         df['Vector_Trend'] = d
         
+        # Chop Index for Volatility Gate
         df['Chop_Index'] = 100 * np.log10(QuantumCore.atr(df,1).rolling(14).sum() / (df['High'].rolling(14).max()-df['Low'].rolling(14).min()+1e-9)) / np.log10(14)
         df['Vector_Locked'] = df['Chop_Index'] > 60
 
-        # 3. MCM (Cloud)
-        hma55 = QuantumCore.hma(df['Close'], 55); atr55 = QuantumCore.atr(df, 55)
-        df['MCM_Upper'] = hma55 + atr55*1.5; df['MCM_Lower'] = hma55 - atr55*1.5
+        # 3. MCM (Cloud System)
+        hma55 = QuantumCore.hma(df['Close'], 55)
+        atr55 = QuantumCore.atr(df, 55)
+        df['MCM_Upper'] = hma55 + atr55*1.5
+        df['MCM_Lower'] = hma55 - atr55*1.5
         df['MCM_Trend'] = np.where(df['Close'] > df['MCM_Upper'], 1, np.where(df['Close'] < df['MCM_Lower'], -1, 0))
         df['MCM_Trend'] = df['MCM_Trend'].replace(to_replace=0, method='ffill')
         df['MCM_Stop'] = np.where(df['MCM_Trend']==1, df['MCM_Lower'], df['MCM_Upper'])
 
         # 4. GANN
-        h_ma = df['High'].rolling(3).mean(); l_ma = df['Low'].rolling(3).mean()
-        act, gt = np.zeros(len(df)), np.zeros(len(df)); act[0] = l_ma[0]; gt[0] = 1
+        h_ma = df['High'].rolling(3).mean()
+        l_ma = df['Low'].rolling(3).mean()
+        act, gt = np.zeros(len(df)), np.zeros(len(df))
+        act[0] = l_ma[0]
+        gt[0] = 1
         hm_v, lm_v = h_ma.values, l_ma.values
         for i in range(1, len(df)):
             if gt[i-1] == 1:
@@ -238,19 +267,19 @@ class QuantumCore:
                 else: gt[i], act[i] = -1, hm_v[i]
         df['Gann_Activator'], df['Gann_Trend'] = act, gt
 
-        # 5. F&G v4
+        # 5. F&G v4 (Sentiment)
         delta = df['Close'].diff()
         rsi = 100 - (100/(1+(delta.where(delta>0,0).ewm(alpha=1/14).mean()/(-delta.where(delta<0,0).ewm(alpha=1/14).mean()))))
         zs, zl = QuantumCore.zlema(df['Close'],50), QuantumCore.zlema(df['Close'],200)
         ts = np.where((df['Close']>zs)&(zs>zl), 75, np.where(df['Close']>zs, 60, np.where((df['Close']<zs)&(zs<zl), 25, 40)))
         df['FG_Index'] = (rsi*0.3 + ts*0.2 + 50*0.5).rolling(3).mean()
 
-        # 6. EXTRAS (SMC + Squeeze)
+        # 6. EXTRAS (SMC Pivots + Squeeze Momentum)
         df['Pivot_H'] = df['High'][(df['High'].shift(1)<df['High']) & (df['High'].shift(-1)<df['High'])]
         df['Pivot_L'] = df['Low'][(df['Low'].shift(1)>df['Low']) & (df['Low'].shift(-1)>df['Low'])]
         df['Sqz_Mom'] = df['Close'].rolling(20).apply(lambda y: linregress(np.arange(20), y)[0], raw=True) * 100
 
-        # 7. GOD MODE SCORE
+        # 7. GOD MODE SCORE (Aggregated Signal)
         df['GM_Score'] = np.where(df['MCM_Trend']==1, 1, -1) + np.where(df['Gann_Trend']==1, 1, -1) + np.where(df['Vector_Trend']==1, 1, -1) + np.sign(df['Sqz_Mom'])
         
         return df.dropna()
@@ -260,8 +289,10 @@ class QuantumCore:
         ret = df['Close'].pct_change().dropna()
         m, s = ret.mean(), ret.std()
         sim_r = np.random.normal(m, s, (30, 50))
-        paths = np.zeros((30, 50)); paths[0] = df['Close'].iloc[-1]
-        for t in range(1, 30): paths[t] = paths[t-1] * (1 + sim_r[t])
+        paths = np.zeros((30, 50))
+        paths[0] = df['Close'].iloc[-1]
+        for t in range(1, 30): 
+            paths[t] = paths[t-1] * (1 + sim_r[t])
         return paths
 
     @staticmethod
@@ -315,7 +346,7 @@ def load_secrets():
             k["oai"] = st.secrets.get("OPENAI_API_KEY", "")
             k["tg_t"] = st.secrets.get("TELEGRAM_TOKEN", "")
             k["tg_c"] = st.secrets.get("TELEGRAM_CHAT_ID", "")
-    except FileNotFoundError: pass # Gracefully handle missing secrets file
+    except FileNotFoundError: pass 
     except Exception: pass
     
     if k["gem"]: s["gem"] = True
@@ -341,7 +372,7 @@ class DataEngine:
             # FIX: Robust Column Flattening for YFinance
             df = yf.download(ticker, period=p, interval=i, progress=False)
             
-            # MultiIndex Handling
+            # MultiIndex Handling (Critical for new YF versions)
             if isinstance(df.columns, pd.MultiIndex):
                 try:
                     df.columns = df.columns.droplevel(1) 
@@ -425,13 +456,13 @@ def render_charts(df, ticker, show_opt, vp_levels=None):
         fig.add_trace(go.Scatter(x=df.index, y=df['Pivot_H'], mode='markers', marker=dict(symbol='triangle-down', color='red', size=8), name="Swing High"), row=1, col=1)
         fig.add_trace(go.Scatter(x=df.index, y=df['Pivot_L'], mode='markers', marker=dict(symbol='triangle-up', color='green', size=8), name="Swing Low"), row=1, col=1)
 
-    # --- UPGRADE: VP LEVELS PROJECTION ---
+    # VP LEVELS PROJECTION
     if vp_levels:
         fig.add_hline(y=vp_levels['poc'], line_dash="solid", line_color="#FF6D00", annotation_text="POC", row=1, col=1)
         fig.add_hline(y=vp_levels['vah'], line_dash="dot", line_color="#00E5FF", annotation_text="VAH", row=1, col=1)
         fig.add_hline(y=vp_levels['val'], line_dash="dot", line_color="#00E5FF", annotation_text="VAL", row=1, col=1)
 
-    # --- UPGRADE: SIGNAL ARROWS (God Mode Flip) ---
+    # SIGNAL ARROWS
     gm_flip = df['GM_Score'].diff()
     buy_sigs = df[ (df['GM_Score'] > 0) & (df['GM_Score'].shift(1) <= 0) ]
     sell_sigs = df[ (df['GM_Score'] < 0) & (df['GM_Score'].shift(1) >= 0) ]
@@ -463,11 +494,11 @@ def render_mc(paths):
     
     fig = go.Figure()
     
-    # 1. Background Chaos (Limit to 50 paths for performance)
+    # 1. Background Chaos
     for i in range(min(50, paths.shape[1])): 
         fig.add_trace(go.Scatter(y=paths[:, i], mode='lines', line=dict(color='rgba(41, 121, 255, 0.05)', width=1), showlegend=False, hoverinfo='skip'))
         
-    # 2. Confidence Interval (Cloud)
+    # 2. Confidence Interval
     fig.add_trace(go.Scatter(y=p95, mode='lines', line=dict(width=0), showlegend=False, hoverinfo='skip'))
     fig.add_trace(go.Scatter(y=p5, mode='lines', line=dict(width=0), fill='tonexty', fillcolor='rgba(0, 229, 255, 0.1)', name='90% Conf. Interval', hoverinfo='skip'))
     
@@ -561,7 +592,7 @@ def render_physics_dashboard(df):
     st.plotly_chart(fig, use_container_width=True)
 
 def render_macro_dashboard(ticker):
-    """NEW: Global Macro Intelligence Dashboard"""
+    """Global Macro Intelligence Dashboard"""
     
     # 1. Fetch Data
     df_macro = DataEngine.get_macro_correlation(ticker)
@@ -607,7 +638,7 @@ def render_macro_dashboard(ticker):
         fig_perf.update_layout(template="plotly_dark", height=500, yaxis_title="% Return", paper_bgcolor="#050505", plot_bgcolor="#050505")
         st.plotly_chart(fig_perf, use_container_width=True)
 
-    # Seasonality (Existing)
+    # Seasonality
     st.markdown("### 📅 HISTORICAL SEASONALITY")
     hm = DataEngine.get_seasonality(ticker)
     if hm is not None:
@@ -759,8 +790,7 @@ def main():
                             p = Intelligence.generate_strategy_prompt(ticker, timeframe, last, sc, vp_data, last['Reynolds'])
                             r = "NO KEYS"
                             
-                            # ROBUST SELF-HEALING AI LOGIC (FIXED)
-                            # 1. Gemini
+                            # ROBUST SELF-HEALING AI LOGIC
                             gem_key = keys["gem"].strip()
                             if gem_key and genai:
                                 try:
@@ -776,7 +806,7 @@ def main():
                                 except Exception as e:
                                     r = f"Gemini Error: {str(e)}"
                             
-                            # 2. OpenAI Fallback
+                            # OpenAI Fallback
                             oai_key = keys["oai"].strip()
                             if (r == "NO KEYS" or "Error" in r) and oai_key and OpenAI:
                                 try:
@@ -791,20 +821,32 @@ def main():
                             
                             if r == "NO KEYS": r = "⚠️ AI Service Unavailable. Please check API Keys in sidebar."
                             
-                            st.markdown(r)
+                            st.session_state['ai_report'] = r
+                        
+                        # Display Report from Session State
+                        if st.session_state['ai_report']:
+                            st.markdown(st.session_state['ai_report'])
                             
                     with c2:
                         st.markdown("### 📡 BROADCAST CENTER")
-                        tmpl = st.selectbox("SIGNAL TEMPLATE", ["Standard", "Scalp", "Swing", "Executive"])
+                        # UPDATED: Added "AI Neural Report" to dropdown
+                        tmpl = st.selectbox("SIGNAL TEMPLATE", ["Standard", "Scalp", "Swing", "Executive", "AI Neural Report"])
                         
-                        # Dynamic Message Generation
-                        default_msg = Intelligence.construct_telegram_msg(tmpl, ticker, timeframe, last, sc)
-                        msg = st.text_area("PAYLOAD PREVIEW", default_msg, height=150)
+                        # UPDATED: Dynamic Message Generation includes AI Report
+                        if tmpl == "AI Neural Report":
+                             default_msg = st.session_state.get('ai_report', "⚠️ No Intelligence Report Generated. Please run the AI module first.")
+                        else:
+                             default_msg = Intelligence.construct_telegram_msg(tmpl, ticker, timeframe, last, sc)
+                        
+                        msg = st.text_area("PAYLOAD PREVIEW", default_msg, height=300)
                         
                         if st.button("SEND TELEGRAM"):
                             if keys["tg_t"] and keys["tg_c"]:
-                                requests.post(f"https://api.telegram.org/bot{keys['tg_t']}/sendMessage", json={"chat_id": keys['tg_c'], "text": msg, "parse_mode": "Markdown"})
-                                st.success("SENT")
+                                try:
+                                    requests.post(f"https://api.telegram.org/bot{keys['tg_t']}/sendMessage", json={"chat_id": keys['tg_c'], "text": msg, "parse_mode": "Markdown"})
+                                    st.success("SIGNAL TRANSMITTED 🚀")
+                                except Exception as e:
+                                    st.error(f"Transmission Failed: {str(e)}")
                             else: st.error("NO TELEGRAM KEYS")
             else: st.error("DATA ERROR")
 
