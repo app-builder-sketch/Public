@@ -1,3 +1,4 @@
+
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -176,18 +177,34 @@ class QuantEngine:
 
     @staticmethod
     def calc_apex_flux(df, length=14):
+        """
+        Apex Vector v4.1 (Efficiency * Volume Flux)
+        FIX: Explicit Index Alignment enforced to prevent pandas broadcasting errors.
+        """
+        # 1. Efficiency
         rg = df['High'] - df['Low']
         body = np.abs(df['Close'] - df['Open'])
-        eff = np.where(rg==0, 0, body/rg)
-        eff_sm = pd.Series(eff).ewm(span=length).mean()
+        eff_raw = np.where(rg == 0, 0, body / rg)
         
+        # Enforce Index Alignment with df
+        eff_series = pd.Series(eff_raw, index=df.index) 
+        eff_sm = eff_series.ewm(span=length).mean()
+        
+        # 2. Volume Flux
         vol_avg = df['Volume'].rolling(55).mean()
-        v_rat = np.where(vol_avg==0, 1, df['Volume'] / vol_avg)
+        v_rat_raw = np.where(vol_avg == 0, 1, df['Volume'] / vol_avg)
+        
+        # Enforce Index Alignment with df
+        v_rat_series = pd.Series(v_rat_raw, index=df.index)
+        
+        # 3. Vector Direction
         direction = np.sign(df['Close'] - df['Open'])
         
-        raw = direction * eff_sm * v_rat
-        df['Apex_Flux'] = pd.Series(raw).ewm(span=5).mean()
+        # 4. Calculation (Now safe with aligned indices)
+        raw = direction * eff_sm * v_rat_series
+        df['Apex_Flux'] = raw.ewm(span=5).mean()
         
+        # 5. State Classification
         df['Apex_State'] = np.select(
             [df['Apex_Flux'] > 0.6, df['Apex_Flux'] < -0.6],
             ["Super Bull", "Super Bear"], default="Neutral"
@@ -318,11 +335,16 @@ def main():
             st.error("Signal Lost.")
             return
         
-        df = QuantEngine.calc_chedo(df)
-        df = QuantEngine.calc_rqzo(df)
-        df = QuantEngine.calc_apex_flux(df)
-        df = QuantEngine.calc_smc(df)
-        last = df.iloc[-1]
+        # Calculations (Order matters for safety)
+        try:
+            df = QuantEngine.calc_chedo(df)
+            df = QuantEngine.calc_rqzo(df)
+            df = QuantEngine.calc_apex_flux(df)
+            df = QuantEngine.calc_smc(df)
+            last = df.iloc[-1]
+        except Exception as e:
+            st.error(f"Computation Error: {e}")
+            return
 
     # --- RESPONSIVE LAYOUT LOGIC ---
     if is_mobile:
