@@ -260,13 +260,11 @@ class QuantEngine:
 # ==========================================
 class Intelligence:
     @staticmethod
-    def check_ai_key(manual_key=None):
-        """Returns valid key or None."""
-        if manual_key and manual_key.startswith("sk-"):
-            return manual_key
-        if "OPENAI_API_KEY" in st.secrets:
-            return st.secrets["OPENAI_API_KEY"]
-        return None
+    def safe_get_secret(key):
+        """Safely retrieves a secret from st.secrets, returns empty string if not found."""
+        if hasattr(st, "secrets") and key in st.secrets:
+            return st.secrets[key]
+        return ""
 
     @staticmethod
     def analyze(df, ticker, api_key):
@@ -366,15 +364,16 @@ def main():
     
     # --- CREDENTIALS MANAGEMENT ---
     with st.sidebar.expander("🔐 API Credentials", expanded=False):
-        openai_key = st.text_input("OpenAI Key", type="password", help="For AI Analysis")
-        tg_token = st.text_input("Telegram Token", type="password", help="For Broadcast")
-        tg_chat = st.text_input("Telegram Chat ID", help="For Broadcast")
+        # UX FIX: Pre-fill input fields with existing secrets if available
+        # This provides visual confirmation that keys are loaded.
+        def_ai = Intelligence.safe_get_secret("OPENAI_API_KEY")
+        def_token = Intelligence.safe_get_secret("TELEGRAM_TOKEN")
+        def_chat = Intelligence.safe_get_secret("TELEGRAM_CHAT_ID")
+        
+        openai_key = st.text_input("OpenAI Key", value=def_ai, type="password", help="For AI Analysis")
+        tg_token = st.text_input("Telegram Token", value=def_token, type="password", help="For Broadcast")
+        tg_chat = st.text_input("Telegram Chat ID", value=def_chat, help="For Broadcast")
     
-    # Resolving Keys (Secrets vs Manual)
-    final_openai_key = Intelligence.check_ai_key(openai_key)
-    final_tg_token = tg_token if tg_token else st.secrets.get("TELEGRAM_TOKEN", None)
-    final_tg_chat = tg_chat if tg_chat else st.secrets.get("TELEGRAM_CHAT_ID", None)
-
     # --- ASSETS ---
     st.sidebar.markdown("### Market Data")
     asset_class = st.sidebar.selectbox("Sector", DataService.get_asset_classes())
@@ -415,7 +414,8 @@ def main():
         
     with t2:
         if st.button("Run Intelligence", use_container_width=is_mobile):
-            res = Intelligence.analyze(df, ticker, final_openai_key)
+            # Pass the explicitly loaded key (from input or default)
+            res = Intelligence.analyze(df, ticker, openai_key)
             st.markdown(res)
             
     with t3:
@@ -445,7 +445,7 @@ def main():
     with t4:
         msg = st.text_area("Broadcast Payload", f"AXIOM SIGNAL: {ticker}\nFlux: {last['Apex_State']}\nEntropy: {last['CHEDO']:.2f}")
         if st.button("🚀 Broadcast to Telegram", use_container_width=is_mobile):
-            success, info = Intelligence.broadcast_telegram(msg, final_tg_token, final_tg_chat)
+            success, info = Intelligence.broadcast_telegram(msg, tg_token, tg_chat)
             if success: st.success(info)
             else: st.error(info)
 
