@@ -291,15 +291,43 @@ class DataEngine:
     @staticmethod
     @st.cache_data(ttl=60)
     def fetch(ticker, timeframe):
-        p_map = {"15m": ("60d", "15m"), "1h": ("730d", "1h"), "4h": ("730d", "1h"), "1d": ("5y", "1d"), "1wk": ("5y", "1wk")}
+        # MAPPING
+        p_map = {
+            "15m": ("60d", "15m"), 
+            "1h": ("730d", "1h"), 
+            "4h": ("730d", "1h"), 
+            "1d": ("5y", "1d"), 
+            "1wk": ("5y", "1wk")
+        }
         p, i = p_map.get(timeframe, ("1y", "1d"))
+        
         try:
+            # FIX: Robust Column Flattening for YFinance
             df = yf.download(ticker, period=p, interval=i, progress=False)
-            if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.get_level_values(0)
-            if df.empty: return None
-            if timeframe == "4h": df = df.resample("4h").agg({'Open':'first','High':'max','Low':'min','Close':'last','Volume':'sum'}).dropna()
+            
+            # MultiIndex Handling
+            if isinstance(df.columns, pd.MultiIndex):
+                try:
+                    df.columns = df.columns.droplevel(1) 
+                except:
+                    df.columns = df.columns.get_level_values(0)
+            
+            # Check for Empty Data
+            if df.empty:
+                st.error(f"⚠️ YFinance returned no data for {ticker}. The symbol may be delisted or requires a suffix (e.g. .L, .NS).")
+                return None
+            
+            # 4H Resampling
+            if timeframe == "4h":
+                df = df.resample("4h").agg({
+                    'Open':'first', 'High':'max', 'Low':'min', 'Close':'last', 'Volume':'sum'
+                }).dropna()
+                
             return df
-        except: return None
+            
+        except Exception as e:
+            st.error(f"⚠️ Data Fetch Error: {str(e)}")
+            return None
 
     @staticmethod
     def get_macro():
@@ -308,8 +336,11 @@ class DataEngine:
             d = yf.download(list(t.values()), period="5d", interval="1d", group_by='ticker', progress=False)
             res = {}
             for k,v in t.items():
-                df = d[v]
-                res[k] = (df['Close'].iloc[-1], df['Close'].pct_change().iloc[-1]*100)
+                try:
+                    df = d[v]
+                    if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.droplevel(0)
+                    res[k] = (df['Close'].iloc[-1], df['Close'].pct_change().iloc[-1]*100)
+                except: pass
             return res
         except: return {}
 
@@ -317,7 +348,7 @@ class DataEngine:
     def get_seasonality(ticker):
         try:
             df = yf.download(ticker, period="10y", interval="1mo", progress=False)
-            if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.get_level_values(0)
+            if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.droplevel(1)
             df['R'] = df['Close'].pct_change()*100; df['M'] = df.index.month; df['Y'] = df.index.year
             return df.pivot_table(index='Y', columns='M', values='R')
         except: return None
@@ -466,11 +497,8 @@ def main():
                             r = "NO KEYS"
                             if keys["gem"] and genai:
                                 genai.configure(api_key=keys["gem"])
-                                try:
-                                    model = genai.GenerativeModel('gemini-1.5-flash') # Newer, faster model
-                                    r = model.generate_content(p).text
-                                except Exception as e:
-                                    r = f"AI Error: {str(e)}"
+                                # FIX: Use latest Gemini Flash model for speed/stability
+                                r = genai.GenerativeModel('gemini-1.5-flash').generate_content(p).text
                             elif keys["oai"] and OpenAI:
                                 r = OpenAI(api_key=keys["oai"]).chat.completions.create(model="gpt-4", messages=[{"role":"user","content":p}]).choices[0].message.content
                             st.markdown(r)
