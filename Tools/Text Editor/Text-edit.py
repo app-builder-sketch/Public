@@ -6,7 +6,7 @@ from datetime import datetime
 from typing import Dict, Any, List, Optional
 
 # =============================================================================
-# Apex Mobile: Simplified Mobile-First Notes
+# Text to .txt Mobile: Simplified Mobile-First Notes
 # =============================================================================
 
 # 'centered' layout reads better on phones than 'wide'
@@ -82,7 +82,7 @@ def delete_note(nid):
 # Mobile UI Layout
 # =============================================================================
 
-st.title("📱 Apex Notes")
+st.title("📱 Notes")
 
 # --- Top Control Bar ---
 # We use columns here, but simple ones that stack well if needed
