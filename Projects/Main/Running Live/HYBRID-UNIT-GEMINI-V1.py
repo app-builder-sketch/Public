@@ -653,7 +653,8 @@ class Intelligence:
         # 2. TP Calculations (Risk Based)
         risk = abs(price - stop)
         
-        # Direction
+        # Direction Logic
+        # Primary: God Mode Score. Secondary: Dark Vector Trend.
         is_bull = sc > 0 or (sc == 0 and last['Vector_Trend'] == 1)
         direction_icon = "🐂 LONG" if is_bull else "🐻 SHORT"
         
@@ -667,10 +668,13 @@ class Intelligence:
         # 4. Squeeze Status
         sqz = "⚠️ SQUEEZE DETECTED" if last['Sqz_Mom'] == 0 else "⚪ NO SQUEEZE"
         
-        # 5. VWAP Relation
+        # 5. Advanced Flow Analysis
+        rvol_val = last['RVOL']
+        rvol_desc = "High" if rvol_val > 1.5 else ("Low" if rvol_val < 0.7 else "Normal")
+        
         vwap_rel = "Above" if price > last['VWAP'] else "Below"
         
-        # 6. Construct Full Message
+        # 6. Construct Military-Grade Message
         msg = f"""SIGNAL: {direction_icon}
 
 Confidence: {conf}
@@ -678,7 +682,7 @@ Sentiment: {last['FG_Index']:.0f}/100
 Squeeze: {sqz}
 
 🌊 FLOW & VOL
-RVOL: {last['RVOL']:.2f}
+RVOL: {rvol_val:.2f} ({rvol_desc})
 Money Flow: {last['MFI']:.2f}
 VWAP Relation: {vwap_rel}
 
@@ -829,14 +833,17 @@ def main():
                             
                     with c2:
                         st.markdown("### 📡 BROADCAST CENTER")
+                        # UPDATED: We use a unified, intelligent generator for all signal types
+                        # but keep the dropdown for user preference in case we add more templates later
                         tmpl = st.selectbox("SIGNAL TEMPLATE", ["Standard", "Scalp", "Swing", "Executive", "AI Neural Report"])
                         
                         if tmpl == "AI Neural Report":
                              default_msg = st.session_state.get('ai_report', "⚠️ No Intelligence Report Generated. Please run the AI module first.")
                         else:
+                             # THIS CALLS THE NEW "BIG BRAIN" SIGNAL GENERATOR
                              default_msg = Intelligence.construct_telegram_msg(tmpl, ticker, timeframe, last, sc)
                         
-                        msg = st.text_area("PAYLOAD PREVIEW", default_msg, height=300)
+                        msg = st.text_area("PAYLOAD PREVIEW", default_msg, height=400)
                         
                         if st.button("SEND TELEGRAM"):
                             if keys["tg_t"] and keys["tg_c"]:
@@ -856,6 +863,16 @@ def main():
                                     st.success("OUTLOOK SENT 🌍")
                                 except Exception as e: st.error(f"Transmission Failed: {str(e)}")
                             else: st.error("NO TELEGRAM KEYS")
+            
+            # --- NEW: INDIVIDUAL INDICATOR ANALYSIS DASHBOARD ---
+            # To give the dashboard a "bigger brain" visually
+            st.markdown("---")
+            st.markdown("### 🔬 DEEP DIVE ANALYTICS")
+            d1, d2, d3, d4 = st.columns(4)
+            d1.metric("RVOL STATUS", f"{last['RVOL']:.2f}", "HIGH" if last['RVOL']>1.5 else "NORMAL")
+            d2.metric("MONEY FLOW", f"{last['MFI']:.2f}", "INFLOW" if last['MFI']>50 else "OUTFLOW")
+            d3.metric("VWAP DIST", f"{(last['Close']-last['VWAP']):.2f}", "ABOVE" if last['Close']>last['VWAP'] else "BELOW")
+            d4.metric("SQZ MOMENTUM", f"{last['Sqz_Mom']:.2f}", "ACTIVE" if last['Sqz_Mom']!=0 else "OFF")
 
             else: st.error("DATA ERROR")
 
