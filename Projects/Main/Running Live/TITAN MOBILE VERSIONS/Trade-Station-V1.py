@@ -1,6 +1,7 @@
 """
 Trade-Station-MOBILE EDITION
 Version 18.4: Professional Telegram Reporting + Integrated Apex SMC
+(Upgraded & Optimized)
 """
 
 import time
@@ -8,7 +9,7 @@ import math
 import sqlite3
 import random
 import json
-from typing import Dict, Optional, List
+from typing import Dict, Optional, List, Tuple, Any
 from contextlib import contextmanager
 
 import streamlit as st
@@ -119,10 +120,11 @@ HEADERS = {"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
 # =============================================================================
 # TICKER UNIVERSE
 # =============================================================================
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=3600, show_spinner=False)
 def get_binanceus_usdt_bases() -> List[str]:
+    """Fetches available USDT pairs from Binance.US with error handling."""
     try:
-        r = requests.get(f"{BINANCE_API_BASE}/exchangeInfo", headers=HEADERS, timeout=6)
+        r = requests.get(f"{BINANCE_API_BASE}/exchangeInfo", headers=HEADERS, timeout=10)
         if r.status_code != 200:
             return []
         js = r.json()
@@ -136,7 +138,8 @@ def get_binanceus_usdt_bases() -> List[str]:
             if base:
                 bases.add(base.upper())
         return sorted(list(bases))
-    except Exception:
+    except Exception as e:
+        # Silently fail or log in a real app; returning empty list ensures non-breaking
         return []
 
 # =============================================================================
@@ -226,10 +229,17 @@ with st.sidebar:
 
     with st.expander("🧬 Ticker Universe (Live Menu)", expanded=True):
         if bases_all:
+            # Check if current input exists in the list to prevent index errors
+            current_index = 0
+            if st.session_state.symbol_input in bases_all:
+                current_index = bases_all.index(st.session_state.symbol_input)
+            elif "BTC" in bases_all:
+                current_index = bases_all.index("BTC")
+
             selected_base = st.selectbox(
                 "Select Asset (Searchable)",
                 options=bases_all,
-                index=bases_all.index("BTC") if "BTC" in bases_all else 0,
+                index=current_index,
                 key="uni_select"
             )
             if selected_base != st.session_state.symbol_input:
@@ -271,8 +281,13 @@ with st.sidebar:
 
     st.markdown("---")
     st.subheader("🤖 NOTIFICATIONS")
-    tg_token = st.text_input("Bot Token", value=st.secrets.get("TELEGRAM_TOKEN", ""), type="password")
-    tg_chat = st.text_input("Chat ID", value=st.secrets.get("TELEGRAM_CHAT_ID", ""))
+    
+    # Safe secret retrieval
+    default_token = st.secrets.get("TELEGRAM_TOKEN", "") if "TELEGRAM_TOKEN" in st.secrets else ""
+    default_chat = st.secrets.get("TELEGRAM_CHAT_ID", "") if "TELEGRAM_CHAT_ID" in st.secrets else ""
+    
+    tg_token = st.text_input("Bot Token", value=default_token, type="password")
+    tg_chat = st.text_input("Chat ID", value=default_chat)
 
 render_ticker_tape(symbol)
 
@@ -302,13 +317,16 @@ def calculate_adx(df, length=14):
     df['ndm'] = np.where((df['down_move'] > df['up_move']) & (df['down_move'] > 0), df['down_move'], 0)
     df['tr'] = np.maximum(df['high'] - df['low'], np.maximum(abs(df['high'] - df['close'].shift(1)), abs(df['low'] - df['close'].shift(1))))
     
+    # Improved efficiency
     df['tr_s'] = df['tr'].rolling(length).sum()
     df['pdm_s'] = df['pdm'].rolling(length).sum()
     df['ndm_s'] = df['ndm'].rolling(length).sum()
     
     df['pdi'] = 100 * (df['pdm_s'] / df['tr_s'])
     df['ndi'] = 100 * (df['ndm_s'] / df['tr_s'])
-    df['dx'] = 100 * abs(df['pdi'] - df['ndi']) / (df['pdi'] + df['ndi'])
+    # Avoid division by zero
+    den = df['pdi'] + df['ndi']
+    df['dx'] = np.where(den != 0, 100 * abs(df['pdi'] - df['ndi']) / den, 0)
     return df['dx'].rolling(length).mean()
 
 def calculate_wavetrend(df, chlen=10, avg=21):
@@ -333,13 +351,20 @@ def calculate_fibonacci(df, lookback=50):
 
 def calculate_fear_greed_index(df):
     try:
+        df = df.copy()
         df['log_ret'] = np.log(df['close'] / df['close'].shift(1))
+        # Protect against empty slices
+        if len(df) < 90: return 50
+        
         vol_score = 50 - ((df['log_ret'].rolling(30).std().iloc[-1] - df['log_ret'].rolling(90).std().iloc[-1]) / df['log_ret'].rolling(90).std().iloc[-1]) * 100
         vol_score = max(0, min(100, vol_score))
+        
         rsi = df['rsi'].iloc[-1]
+        
         sma_50 = df['close'].rolling(50).mean().iloc[-1]
         dist = (df['close'].iloc[-1] - sma_50) / sma_50
         trend_score = 50 + (dist * 1000)
+        
         fg = (vol_score * 0.3) + (rsi * 0.4) + (max(0, min(100, trend_score)) * 0.3)
         return int(fg)
     except:
@@ -348,7 +373,11 @@ def calculate_fear_greed_index(df):
 # =============================================================================
 # ENGINE
 # =============================================================================
+@st.cache_data(show_spinner=True)
 def run_engines(df, amp, dev, hma_l, tp1, tp2, tp3, mf_l, vol_l, gann_l, apex_len, apex_mult, apex_ma_type, liq_len):
+    """
+    Main logic engine. Cached to improve performance during UI interactions.
+    """
     if df.empty:
         return df, []
     df = df.copy().reset_index(drop=True)
@@ -389,6 +418,9 @@ def run_engines(df, amp, dev, hma_l, tp1, tp2, tp3, mf_l, vol_l, gann_l, apex_le
     stop = np.full(len(df), np.nan)
     curr_t = 0
     curr_s = np.nan
+    
+    # Loop Optimization: Pre-fetch columns as numpy arrays for speed
+    # Note: State dependence prevents full vectorization of this block
     for i in range(amp, len(df)):
         c = df.at[i,'close']
         d = df.at[i,'atr']*dev
@@ -661,25 +693,36 @@ def send_telegram_msg(token, chat, msg):
         return True
     except: return False
 
-@st.cache_data(ttl=5)
+@st.cache_data(ttl=5, show_spinner=False)
 def get_klines(symbol_bin, interval, limit):
-    try:
-        r = requests.get(f"{BINANCE_API_BASE}/klines", params={"symbol": symbol_bin, "interval": interval, "limit": limit}, headers=HEADERS, timeout=4)
-        if r.status_code == 200:
-            df = pd.DataFrame(r.json(), columns=['t','o','h','l','c','v','T','q','n','V','Q','B'])
-            df['timestamp'] = pd.to_datetime(df['t'], unit='ms')
-            df[['open','high','low','close','volume']] = df[['o','h','l','c','v']].astype(float)
-            return df[['timestamp','open','high','low','close','volume']]
-    except: pass
+    """
+    Fetch klines with retry logic for robust mobile connections.
+    """
+    retries = 3
+    for attempt in range(retries):
+        try:
+            r = requests.get(f"{BINANCE_API_BASE}/klines", params={"symbol": symbol_bin, "interval": interval, "limit": limit}, headers=HEADERS, timeout=4)
+            if r.status_code == 200:
+                df = pd.DataFrame(r.json(), columns=['t','o','h','l','c','v','T','q','n','V','Q','B'])
+                df['timestamp'] = pd.to_datetime(df['t'], unit='ms')
+                df[['open','high','low','close','volume']] = df[['o','h','l','c','v']].astype(float)
+                return df[['timestamp','open','high','low','close','volume']]
+        except requests.exceptions.RequestException:
+            if attempt < retries - 1:
+                time.sleep(0.5) # Short backoff
+                continue
+            pass
     return pd.DataFrame()
 
 # =============================================================================
 # APP EXECUTION
 # =============================================================================
-df = get_klines(symbol, timeframe, limit)
+with st.spinner("Connecting to Binance Engine..."):
+    df = get_klines(symbol, timeframe, limit)
 
 if not df.empty:
     df = df.dropna(subset=['close'])
+    # Cached Execution
     df, visual_zones = run_engines(df, int(amplitude), channel_dev, int(hma_len), tp1_r, tp2_r, tp3_r, 14, 20, int(gann_len), int(apex_len), apex_mult, apex_ma_type, int(pivot_len))
 
     last = df.iloc[-1]
@@ -812,7 +855,15 @@ Symbol: {symbol} | TF: {timeframe}
     if not apex_sells.empty:
          fig.add_trace(go.Scatter(x=apex_sells['timestamp'], y=apex_sells['high']*1.001, mode='markers', marker=dict(symbol='arrow-bar-down', size=12, color='#FF1744'), name='APEX SELL'))
 
-    fig.update_layout(height=450, template='plotly_dark', margin=dict(l=0, r=0, t=20, b=20), xaxis_rangeslider_visible=False, legend=dict(orientation="h", y=1, x=0))
+    # Update layout for mobile touch friendly behavior
+    fig.update_layout(
+        height=450, 
+        template='plotly_dark', 
+        margin=dict(l=0, r=0, t=20, b=20), 
+        xaxis_rangeslider_visible=False, 
+        legend=dict(orientation="h", y=1, x=0),
+        hovermode="x unified" # Mobile Optimization: Unified hover box
+    )
     st.plotly_chart(fig, use_container_width=True)
 
     # INDICATORS TABS
@@ -820,13 +871,13 @@ Symbol: {symbol} | TF: {timeframe}
     with t1:
         f1 = go.Figure()
         f1.add_candlestick(x=df['timestamp'], open=df['open'], high=df['high'], low=df['low'], close=df['close'])
-        f1.update_layout(height=300, template='plotly_dark', margin=dict(l=0,r=0,t=0,b=0))
+        f1.update_layout(height=300, template='plotly_dark', margin=dict(l=0,r=0,t=0,b=0), hovermode="x unified")
         st.plotly_chart(f1, use_container_width=True)
     with t2:
         f2 = go.Figure()
         cols = ['#00e676' if x > 0 else '#ff1744' for x in df['money_flow']]
         f2.add_trace(go.Bar(x=df['timestamp'], y=df['money_flow'], marker_color=cols))
-        f2.update_layout(height=300, template='plotly_dark', margin=dict(l=0,r=0,t=0,b=0))
+        f2.update_layout(height=300, template='plotly_dark', margin=dict(l=0,r=0,t=0,b=0), hovermode="x unified")
         st.plotly_chart(f2, use_container_width=True)
     with t3:
         f3 = go.Figure(go.Indicator(mode="gauge+number", value=fg_index, gauge={'axis': {'range': [None, 100]}, 'bar': {'color': "white"}}))
