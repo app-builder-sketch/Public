@@ -1,3 +1,4 @@
+
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -337,13 +338,25 @@ class Intelligence:
 
     @staticmethod
     def generate_signal_report(df, ticker):
-        """Generates the Detailed Report (Long format)."""
+        """
+        Generates the Detailed Report (Long format) with Educational Explanations.
+        """
         last = df.iloc[-1]
         trend_emoji = "🐂 BULLISH" if last['Trend_Dir'] == 1 else "🐻 BEARISH"
+        
+        # Flux & Explanation
         flux_val = last['Apex_Flux']
         flux_emoji = "🟢 Superconductor" if abs(flux_val) > 0.6 else "⚪ Neutral"
+        flux_expl = "Price moving with zero resistance (High Efficiency)." if abs(flux_val) > 0.6 else "Market faces friction; standard volatility applies."
+        
+        # Entropy & Explanation
         chedo_val = last['CHEDO']
         entropy_status = "⚠️ CRITICAL CHAOS" if abs(chedo_val) > 0.8 else "✅ Stable State"
+        chedo_expl = "High probability of mean-reversion/snap-back." if abs(chedo_val) > 0.8 else "Trend behavior is reliable."
+        
+        # Relativity
+        rqzo_val = last['RQZO']
+        rqzo_expl = "Time-dilation high; expect explosive moves." if abs(rqzo_val) > 1 else "Standard market velocity."
         
         try:
             res_zone = df[df['Pivot_H']]['High'].iloc[-1]
@@ -361,13 +374,18 @@ class Intelligence:
 • Resistance: ${res_zone:,.2f}
 • Support: ${sup_zone:,.2f}
 
-⚛️ *QUANTUM PHYSICS*
+⚛️ *QUANTUM PHYSICS & EDUCATION*
 • Flux Vector: {flux_emoji} ({flux_val:.2f})
+  ℹ️ *Insight*: {flux_expl}
+
 • Entropy (CHEDO): {entropy_status} ({chedo_val:.2f})
-• Relativity (RQZO): {last['RQZO']:.2f}
+  ℹ️ *Insight*: {chedo_expl}
+
+• Relativity (RQZO): {rqzo_val:.2f}
+  ℹ️ *Insight*: {rqzo_expl}
 
 🛡️ *STRATEGIC OUTLOOK*
-Regime: {"High-Energy" if abs(last['RQZO']) > 1 else "Low-Energy"} {trend_emoji.split()[1]}
+Regime: {"High-Energy" if abs(rqzo_val) > 1 else "Low-Energy"} {trend_emoji.split()[1]}
 Action: {"Monitor Breakout" if abs(flux_val) > 0.6 else "Wait for Alignment"}
 """
 
@@ -384,15 +402,22 @@ Action: {"Monitor Breakout" if abs(flux_val) > 0.6 else "Wait for Alignment"}
 
         system_prompt = """
         You are 'Axiom', a Tier-1 Quantitative Physicist.
-        Analyze using FIRST PRINCIPLES:
+        Analyze using FIRST PRINCIPLES.
+        For every metric, provide a 'Why' explanation for the user.
+        
         1. CHEDO (Entropy): >0.8 = Max Chaos.
         2. RQZO (Relativity): High Amp = Instability.
         3. Apex Flux (Vector): >0.6 = Superconductor.
         
         OUTPUT:
-        ### ⚛️ Quantum State
+        ### ⚛️ Quantum State & Explanations
+        (State the regime and explain what it means for price action)
+        
         ### 🛡️ Risk Physics
-        ### 🚀 Strategy Options (Aggressive/Conservative/Contrarian) with Entry/Stop/TP.
+        (Analyze Entropy/Volatility interaction and explain the risk)
+        
+        ### 🚀 Strategy Options
+        (Aggressive/Conservative/Contrarian with Entry/Stop/TP)
         """
         user_prompt = f"Asset: {ticker} | Price: {last['Close']} | Res: {res_str} | Sup: {sup_str} | CHEDO: {last['CHEDO']:.3f} | RQZO: {last['RQZO']:.3f} | Flux: {last['Apex_Flux']:.3f}"
         
@@ -522,13 +547,12 @@ def main():
         html = f"""<div class="tradingview-widget-container"><div id="tradingview_widget"></div><script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script><script type="text/javascript">new TradingView.widget({{"width": "100%", "height": {h}, "symbol": "{tv_sym}", "interval": "D", "timezone": "Etc/UTC", "theme": "dark", "style": "1", "locale": "en", "toolbar_bg": "#f1f3f6", "enable_publishing": false, "hide_side_toolbar": false, "allow_symbol_change": true, "details": true, "container_id": "tradingview_widget"}});</script></div>"""
         st.components.v1.html(html, height=h)
     with t4:
-        # TWO SIGNAL OPTIONS: Quick (Normal) vs Detailed
         st.subheader("📡 Signal Broadcaster")
         
-        # 1. NORMAL TRADE SIGNAL
+        # 1. QUICK SIGNAL (Restored)
         st.markdown("#### ⚡ Quick Signal")
         default_quick = Intelligence.generate_quick_signal(df, ticker)
-        msg_quick = st.text_area("Trade Signal Payload", value=default_quick, height=150, key="quick_sig")
+        msg_quick = st.text_area("Payload", value=default_quick, height=150, key="quick")
         if st.button("🚀 Send Trade Signal", use_container_width=is_mobile):
             success, info = Intelligence.broadcast_telegram(msg_quick, tg_token, tg_chat)
             if success: st.success(info)
@@ -536,10 +560,10 @@ def main():
             
         st.divider()
         
-        # 2. DETAILED REPORT
-        st.markdown("#### 📄 Detailed Report")
+        # 2. DETAILED REPORT (Preserved with Explanations)
+        st.markdown("#### 📄 Detailed Report & Education")
         default_report = Intelligence.generate_signal_report(df, ticker)
-        msg_report = st.text_area("Full Report Payload", value=default_report, height=300, key="full_rep")
+        msg_report = st.text_area("Report Payload", value=default_report, height=350, key="report")
         if st.button("📨 Send Detailed Report", use_container_width=is_mobile):
             success, info = Intelligence.broadcast_telegram(msg_report, tg_token, tg_chat)
             if success: st.success(info)
