@@ -7,6 +7,7 @@ from plotly.subplots import make_subplots
 import requests
 import math
 import json
+import os
 from scipy.signal import argrelextrema
 from scipy.stats import linregress
 from datetime import datetime
@@ -21,6 +22,29 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded"
 )
+
+# ===============================
+# ENVIRONMENT & SECRETS SETUP
+# ===============================
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass # dotenv not installed, relying on st.secrets or os.environ
+
+def load_key(key_name):
+    """
+    Priority:
+    1. Streamlit Secrets (st.secrets)
+    2. Environment Variables (os.environ / .env)
+    3. Empty String (User must input manually)
+    """
+    # Check Streamlit Secrets
+    if key_name in st.secrets:
+        return st.secrets[key_name]
+    
+    # Check OS Environment
+    return os.getenv(key_name, "")
 
 # ===============================
 # SESSION STATE
@@ -203,12 +227,14 @@ def main():
         timeframe = st.selectbox("Timeframe", ["15m", "1h", "4h", "1d", "1wk"])
 
         st.markdown("### 🔐 API KEYS")
-        gem_key = st.text_input("Gemini", type="password")
-        oai_key = st.text_input("OpenAI", type="password")
+        # Auto-load keys from environment/secrets, allow override
+        gem_key = st.text_input("Gemini", value=load_key("GEMINI_API_KEY"), type="password")
+        oai_key = st.text_input("OpenAI", value=load_key("OPENAI_API_KEY"), type="password")
 
         st.markdown("### 📡 Telegram")
-        tg_token = st.text_input("Bot Token", type="password")
-        tg_chat = st.text_input("Chat ID")
+        # Auto-load keys from environment/secrets, allow override
+        tg_token = st.text_input("Bot Token", value=load_key("TELEGRAM_TOKEN"), type="password")
+        tg_chat = st.text_input("Chat ID", value=load_key("TELEGRAM_CHAT_ID"))
 
         if st.button("🧪 Test Telegram"):
             ok, msg = TelegramEngine.send(
