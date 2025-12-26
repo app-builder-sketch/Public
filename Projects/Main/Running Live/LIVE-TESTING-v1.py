@@ -115,28 +115,53 @@ class UXFactory:
         """, unsafe_allow_html=True)
 
 # ==========================================
-# 3. DATA CORE
+# 3. DATA CORE (ROBUST UPGRADE)
 # ==========================================
 class DataCore:
     @staticmethod
     @st.cache_data(ttl=300)
     def fetch_data(ticker: str, timeframe: str, limit: int = 500) -> pd.DataFrame:
         """
-        Robust data fetching with safe_download logic.
-        Handles Yahoo Finance's lack of native 4H data by resampling 1H.
+        Robust data fetching with Smart Fallback logic.
+        If the requested period fails, it retries with a shorter period.
        
         """
-        tf_map = {"15m": "60d", "1h": "730d", "4h": "730d", "1d": "5y", "1wk": "10y"}
-        period = tf_map.get(timeframe, "2y")
+        # Primary Map: The ideal period we WANT
+        primary_tf_map = {
+            "15m": "60d",  # Max 60 days for 15m
+            "1h": "730d",  # Max 730 days for 1h
+            "4h": "730d",  # Derived from 1h
+            "1d": "5y",
+            "1wk": "10y"
+        }
+        
+        # Fallback Map: A safe period we accept if Primary fails
+        fallback_tf_map = {
+            "15m": "5d",
+            "1h": "60d", 
+            "4h": "60d", 
+            "1d": "1y",
+            "1wk": "2y"
+        }
+
+        period = primary_tf_map.get(timeframe, "1y")
+        dl_interval = "1h" if timeframe == "4h" else timeframe
         
         try:
-            # Handle Yahoo Finance 4h limitation by resampling 1h data
-            dl_interval = "1h" if timeframe == "4h" else timeframe
+            # ATTEMPT 1: Primary Request
+            df = yf.download(ticker, period=period, interval=dl_interval, progress=False, threads=False)
             
-            df = yf.download(ticker, period=period, interval=dl_interval, progress=False)
-            if df.empty: return pd.DataFrame()
+            # ATTEMPT 2: Fallback Request (if empty)
+            if df.empty:
+                safe_period = fallback_tf_map.get(timeframe, "1mo")
+                st.warning(f"⚠️ Primary data stream unavailable. Retrying with backup period ({safe_period})...")
+                df = yf.download(ticker, period=safe_period, interval=dl_interval, progress=False, threads=False)
+
+            if df.empty: 
+                st.error(f"❌ Failed to fetch data for {ticker} ({timeframe}). Yahoo Finance may be rate-limiting.")
+                return pd.DataFrame()
             
-            # MultiIndex Handling (fix for yfinance v0.2+)
+            # MultiIndex Handling (Critical for yfinance v0.2+)
             if isinstance(df.columns, pd.MultiIndex):
                 try: df = df.xs(ticker, axis=1, level=0)
                 except: df.columns = df.columns.get_level_values(0)
@@ -146,21 +171,28 @@ class DataCore:
             df = df.rename(columns=cols)
             if 'Adj close' in df.columns: df['Close'] = df['Adj close']
             
-            # Resample for 4h
+            # Resample for 4h (Aggregating 1h data)
             if timeframe == "4h":
-                df = df.resample('4h').agg({
+                # Ensure index is Datetime
+                df.index = pd.to_datetime(df.index)
+                agg_dict = {
                     'Open': 'first', 'High': 'max', 'Low': 'min', 'Close': 'last', 'Volume': 'sum'
-                }).dropna()
+                }
+                # Only aggregate columns that actually exist
+                agg_dict = {k: v for k, v in agg_dict.items() if k in df.columns}
+                df = df.resample('4h').agg(agg_dict).dropna()
 
             return df.tail(limit)
+        
         except Exception as e:
-            st.error(f"Data Feed Error: {e}")
+            st.error(f"Data Core Critical Error: {str(e)}")
             return pd.DataFrame()
 
     @staticmethod
     @st.cache_data(ttl=3600)
     def get_fundamentals(ticker: str) -> Optional[Dict]:
-        """Fetches fundamentals."""
+        """Fetches fundamentals safely."""
+        # Skip fundamentals for crypto/forex to prevent errors
         if any(x in ticker for x in ["-", "=", "^"]): return None 
         try:
             stock = yf.Ticker(ticker)
@@ -179,12 +211,14 @@ class DataCore:
         """Batch fetches global macro indicators."""
         assets = {"S&P 500": "SPY", "Bitcoin": "BTC-USD", "10Y Yield": "^TNX", "VIX": "^VIX", "DXY": "DX-Y.NYB", "Gold": "GC=F"}
         try:
-            data = yf.download(list(assets.values()), period="5d", interval="1d", progress=False)['Close']
-            prices = {k: data[v].iloc[-1] for k,v in assets.items() if v in data}
-            changes = {k: ((data[v].iloc[-1]-data[v].iloc[-2])/data[v].iloc[-2])*100 for k,v in assets.items() if v in data}
+            data = yf.download(list(assets.values()), period="5d", interval="1d", progress=False, threads=False)['Close']
+            # Fallback for single-column result if only 1 asset returns
+            if isinstance(data, pd.Series): return {}, {}
+            
+            prices = {k: data[v].iloc[-1] for k,v in assets.items() if v in data.columns}
+            changes = {k: ((data[v].iloc[-1]-data[v].iloc[-2])/data[v].iloc[-2])*100 for k,v in assets.items() if v in data.columns}
             return prices, changes
         except: return {}, {}
-
 # ==========================================
 # 4. QUANT ENGINE (PHYSICS + GOD MODE)
 # ==========================================
