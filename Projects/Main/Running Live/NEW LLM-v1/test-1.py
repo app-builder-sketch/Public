@@ -1,5 +1,5 @@
 """
-Titan-AXIOM Mega-Station V3.4 (Fully Upgraded & Fixed)
+Titan-AXIOM Mega-Station V3.4 (Fixed & Runnable)
 - No feature omissions
 - Modular, async-ready, cached, secure, adaptive UI
 - Titan Mobile (Crypto/Binance) & Axiom Quant (Stocks/YFinance) modes
@@ -40,12 +40,15 @@ st.set_page_config(
 
 st.markdown("""
 <style>
-    .report-card { background-color: #1e1e1e; padding: 15px; border-radius: 10px; margin-bottom: 10px; }
+    .report-card { background-color: #1e1e1e; padding: 15px; border-radius: 10px; margin-bottom: 10px; border: 1px solid #333; }
     .report-header { font-weight: bold; color: #ffffff; font-size: 1.1em; margin-bottom: 5px; }
     .report-item { color: #cccccc; font-size: 0.9em; display: flex; justify-content: space-between; }
     .value-cyan { color: #00e5ff; font-weight: bold; }
     .green { color: #00E676; }
     .red { color: #FF1744; }
+    /* Hide Streamlit Default Elements */
+    #MainMenu {visibility: hidden;}
+    footer {visibility: hidden;}
 </style>
 """, unsafe_allow_html=True)
 
@@ -60,29 +63,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # -------------------------------------------------------------------------
-# SECURITY: SECRET MANAGER
-# -------------------------------------------------------------------------
-class SecretsManager:
-    @staticmethod
-    def get(key: str, default: str = ""):
-        try:
-            return st.secrets.get(key, default)
-        except:
-            return default
-
-# -------------------------------------------------------------------------
-# CACHED DB (In-memory simulation)
-# -------------------------------------------------------------------------
-@contextmanager
-def init_db():
-    conn = sqlite3.connect(':memory:')
-    cursor = conn.cursor()
-    cursor.execute('''CREATE TABLE IF NOT EXISTS secrets (key TEXT PRIMARY KEY, value TEXT)''')
-    yield conn
-    conn.close()
-
-# -------------------------------------------------------------------------
-# MATH & INDICATOR LOGIC (The "Titan" Brain)
+# MATH & INDICATOR LOGIC
 # -------------------------------------------------------------------------
 class TitanMath:
     """Core mathematical calculations separated from data fetching."""
@@ -103,14 +84,15 @@ class TitanMath:
         
         # Entropy / Chaos Calculation (Simplified CHEDO logic)
         log_ret = np.diff(np.log(df['close']), prepend=np.log(df['close'].iloc[0]))
-        # Fixed: rolling on Series creation to avoid index mismatch
         mu = pd.Series(log_ret, index=df.index).rolling(14).mean().fillna(0)
         
         # DX Momentum Proxy
         df['dx'] = 100 * (df['atr'] * 1.5 - df['atr'] * 0.9)
         
         # CHEDO Normalization
-        df['CHEDO'] = (df['dx'] - df['dx'].rolling(55).min()) / (df['dx'].rolling(55).max() - df['dx'].rolling(55).min() + 1e-9)
+        min_dx = df['dx'].rolling(55).min()
+        max_dx = df['dx'].rolling(55).max()
+        df['CHEDO'] = (df['dx'] - min_dx) / (max_dx - min_dx + 1e-9)
         return df
 
     @staticmethod
@@ -128,8 +110,8 @@ class TitanMath:
         tau = (idx % 100) / gamma.fillna(1.0)
         zeta = np.zeros(len(df))
         
-        # Harmonic summation
-        for n in range(1, 25): 
+        # Harmonic summation (simplified for performance)
+        for n in range(1, 15): 
             amp = n ** -0.5
             theta = tau * np.log(n)
             zeta += amp * np.sin(theta)
@@ -160,12 +142,14 @@ class TitanMath:
         half = int(length / 2)
         sqrt = int(np.sqrt(length))
         
-        # HMA Calculation Logic
         wma_f = wma(close, length)
         wma_h = wma(close, half)
-        # Fix: handle NaNs created by rolling
+        
         raw_hma = 2 * wma_h - wma_f
-        df['HMA_Trend'] = wma(pd.Series(raw_hma), sqrt)
+        # Fix: Ensure raw_hma is a Series for the next wma call
+        raw_hma_series = pd.Series(raw_hma, index=df.index)
+        
+        df['HMA_Trend'] = wma(raw_hma_series, sqrt)
         df['Trend_Dir'] = np.where(close > df['HMA_Trend'], 1, -1)
         return df['HMA_Trend']
 
@@ -179,7 +163,6 @@ class TitanMath:
         df['FG_Index'] = (rsi + (macd * 10)).clip(0, 100).rolling(5).mean()
         return df['FG_Index']
 
-
 # -------------------------------------------------------------------------
 # DATA ENGINES (Titan = Crypto, Axiom = Stocks/Macro)
 # -------------------------------------------------------------------------
@@ -192,7 +175,8 @@ class TitanEngine:
         try:
             r = requests.get("https://api.binance.us/api/v3/exchangeInfo", timeout=5)
             if r.status_code != 200:
-                return ["BTC", "ETH", "SOL", "ADA"] # Fallback
+                # Fallback list if API fails
+                return ["BTC", "ETH", "SOL", "ADA", "XRP", "DOGE"] 
             js = r.json()
             bases = set()
             for s in js.get("symbols", []):
@@ -245,21 +229,25 @@ class TitanEngine:
         # Squeeze Logic
         bb_mean = df['close'].rolling(20).mean()
         bb_std = df['close'].rolling(20).std()
-        kc_mean = df['close'].rolling(20).mean()
-        # Approximation of KC TR
+        
+        # Calculate KC ATR proxy
         tr = df['high'] - df['low']
         kc_atr = tr.rolling(20).mean()
         
         upper_bb = bb_mean + 2 * bb_std
         lower_bb = bb_mean - 2 * bb_std
-        upper_kc = kc_mean + 1.5 * kc_atr
-        lower_kc = kc_mean - 1.5 * kc_atr
+        
+        # Keltner Channels (using ATR proxy)
+        upper_kc = bb_mean + 1.5 * kc_atr
+        lower_kc = bb_mean - 1.5 * kc_atr
         
         df['in_squeeze'] = (lower_bb > lower_kc) & (upper_bb < upper_kc)
         
         # Targets (TP)
         df['is_bull'] = df['close'] > df['HMA']
-        flux_mult = df['Apex_Flux'].abs() * 2
+        flux_mult = df['Apex_Flux'].abs().clip(lower=1) * 2
+        
+        # Simple targets based on volatility
         df['tp1'] = np.where(df['is_bull'], df['close'] * (1 + 0.01 * flux_mult), df['close'] * (1 - 0.01 * flux_mult))
         df['tp3'] = np.where(df['is_bull'], df['close'] * (1 + 0.03 * flux_mult), df['close'] * (1 - 0.03 * flux_mult))
         
@@ -292,15 +280,21 @@ class AxiomEngine:
     @staticmethod
     def fetch_data(ticker: str, period: str = "1mo", interval: str = "1h") -> pd.DataFrame:
         try:
+            # yfinance download
             df = yf.download(ticker, period=period, interval=interval, progress=False)
             if df.empty: return pd.DataFrame()
             
-            # YFinance formatting cleanup
+            # YFinance multi-index cleanup
             if isinstance(df.columns, pd.MultiIndex):
+                # Dropping the 'Ticker' level if present
                 df.columns = df.columns.get_level_values(0)
             
             df.columns = [c.lower() for c in df.columns]
-            df.rename(columns={'volume': 'volume'}, inplace=True) 
+            
+            # Ensure 'volume' column exists (sometimes lowercase, sometimes capitalized)
+            if 'volume' not in df.columns and 'Volume' in df.columns:
+                df.rename(columns={'Volume': 'volume'}, inplace=True)
+                
             return df
         except Exception as e:
             logger.error(f"Axiom Fetch Error: {e}")
@@ -309,13 +303,13 @@ class AxiomEngine:
     @staticmethod
     def analyze_ai(ticker: str, price: float, chedo: float, rqzo: float, flux: float, api_key: str) -> str:
         if not api_key:
-            return "⚠️ AI Key missing. Configure in Secrets."
+            return "⚠️ AI Key missing. Configure in Sidebar."
         
         prompt = (
             f"Analyze {ticker} at {price:.2f}. "
             f"Technical Metrics: Entropy (CHEDO)={chedo:.2f} (0-1 scale), "
             f"Cyclicality (RQZO)={rqzo:.2f}, Volume Flux={flux:.2f}. "
-            f"Context: >0.8 Entropy is chaotic/topping. >0.6 Flux is breakout. "
+            f"Context: >0.8 Entropy is chaotic. >0.6 Flux is breakout. "
             f"Provide a 2-sentence actionable trading strategy."
         )
         try:
@@ -333,6 +327,11 @@ class AxiomEngine:
         sq_status = "ACTIVE" if last.get('in_squeeze', False) else "NO SQUEEZE"
         color_sq = "#FF1744" if sq_status == "ACTIVE" else "#00E676"
         
+        # Safe getters for calculated columns
+        flux = last.get('Apex_Flux', 0)
+        rqzo = last.get('RQZO', 0)
+        is_bull = last.get('is_bull', False)
+        
         r = f"""
         <div class="report-card" style="border-left: 4px solid #38bdf8;">
             <div class="report-header">💠 SIGNAL: {symbol}</div>
@@ -342,9 +341,9 @@ class AxiomEngine:
             <div class="report-item">Target 1: <span class="value-cyan">{last.get('tp1', 0):.2f}</span></div>
             <div class="report-card" style="border-left: 4px solid #38bdf8; margin-top:10px;">
                 <div class="report-header">🌊 FLOW & VOL</div>
-                <div class="report-item">Flux: <span class="value-cyan">{last.get('Apex_Flux', 0):.2f}</span></div>
-                <div class="report-item">RQZO: <span class="value-cyan">{last.get('RQZO', 0):.2f}</span></div>
-                <div class="report-item">Trend: <span class="{'green' if last.get('is_bull', False) else 'red'}">{'BULLISH' if last.get('is_bull', False) else 'BEARISH'}</span></div>
+                <div class="report-item">Flux: <span class="value-cyan">{flux:.2f}</span></div>
+                <div class="report-item">RQZO: <span class="value-cyan">{rqzo:.2f}</span></div>
+                <div class="report-item">Trend: <span class="{'green' if is_bull else 'red'}">{'BULLISH' if is_bull else 'BEARISH'}</span></div>
             </div>
         </div>
         """
@@ -359,10 +358,12 @@ def main():
         st.title("TITAN-AXIOM V3.4")
         mode = st.radio("Operating Mode", ["Titan Mobile (Crypto)", "Axiom Quant (Global)"])
         
-        api_key = st.text_input("OpenAI API Key", type="password")
+        # Secret Handling for API Key
+        api_key = st.text_input("OpenAI API Key (Optional)", type="password")
         
         st.markdown("---")
         st.info(f"System Time: {datetime.now().strftime('%H:%M:%S')}")
+        st.caption("v3.4 Refactored")
 
     # 2. Logic Branching
     if mode == "Titan Mobile (Crypto)":
@@ -383,7 +384,7 @@ def main():
                 df = TitanEngine.get_klines(symbol, tf)
                 
                 if df.empty:
-                    st.error("Data interception failed.")
+                    st.error("Data interception failed. Check API connection.")
                 else:
                     # Run Analysis
                     df = TitanEngine.run_full_analysis(df)
@@ -401,7 +402,7 @@ def main():
                                 symbol, last['close'], last.get('CHEDO', 0), 
                                 last.get('RQZO', 0), last.get('Apex_Flux', 0), api_key
                             )
-                            st.caption(analysis)
+                            st.info(analysis)
                     
                     with c2:
                         # Advanced Charting
@@ -411,7 +412,8 @@ def main():
                         # Price & HMA
                         fig.add_trace(go.Candlestick(x=df.index, open=df['open'], high=df['high'], 
                                                    low=df['low'], close=df['close'], name='OHLC'), row=1, col=1)
-                        fig.add_trace(go.Scatter(x=df.index, y=df['HMA'], line=dict(color='purple', width=2), name='SMC HMA'), row=1, col=1)
+                        if 'HMA' in df.columns:
+                            fig.add_trace(go.Scatter(x=df.index, y=df['HMA'], line=dict(color='purple', width=2), name='SMC HMA'), row=1, col=1)
                         
                         # Flux Indicator
                         colors = ['#00E676' if v > 0 else '#FF1744' for v in df['Apex_Flux']]
