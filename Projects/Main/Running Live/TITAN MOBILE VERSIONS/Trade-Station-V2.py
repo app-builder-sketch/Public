@@ -638,72 +638,9 @@ class AxiomEngine:
             return client.chat.completions.create(model="gpt-4o", messages=[{"role":"user", "content":prompt}]).choices[0].message.content
         except Exception as e: return f"AI Error: {e}"
 
-# =============================================================================
-# 6. MAIN CONTROLLER
-# =============================================================================
-def main():
-    # SIDEBAR CONTROLLER
-    st.sidebar.header("💠 MEGA-STATION")
-    mode = st.sidebar.radio("ENGINE MODE", ["TITAN MOBILE (Crypto)", "AXIOM QUANT (Stocks)"])
-    
-    with st.sidebar.expander("🔐 KEYS"):
-        tg_token = st.text_input("Bot Token", value=SecretsManager.get("TELEGRAM_TOKEN"), type="password")
-        tg_chat = st.text_input("Chat ID", value=SecretsManager.get("TELEGRAM_CHAT_ID"))
-        ai_key = st.text_input("AI Key", value=SecretsManager.get("OPENAI_API_KEY"), type="password")
-
-    # -------------------------------------------------------------------------
-    # MODE 1: TITAN MOBILE (Binance)
-    # -------------------------------------------------------------------------
-    if mode == "TITAN MOBILE (Crypto)":
-        st.sidebar.subheader("📡 BINANCE FEED")
-        bases = TitanEngine.get_binance_bases()
-        idx = bases.index("BTC") if "BTC" in bases else 0
-        base = st.sidebar.selectbox("Asset", bases, index=idx)
-        ticker = f"{base}USDT"
-        
-        c1, c2 = st.sidebar.columns(2)
-        with c1: timeframe = st.selectbox("TF", ["15m", "1h", "4h", "1d"], index=1)
-        with c2: limit = st.slider("Depth", 100, 500, 200, 50)
-        
-        st.sidebar.markdown("---")
-        st.sidebar.subheader("🧠 LOGIC")
-        amp = st.sidebar.number_input("Amplitude", 2, 100, 10)
-        dev = st.sidebar.number_input("Deviation", 0.5, 5.0, 3.0)
-        hma_len = st.sidebar.number_input("HMA Len", 10, 200, 50)
-        gann_len = st.sidebar.number_input("Gann Len", 2, 50, 3)
-
-        # MAIN UI TITAN
-        st.title(f"💠 TITAN: {base}")
-        Visuals.render_titan_clock()
-        Visuals.render_titan_tape(ticker)
-        
-        with st.spinner("Connecting to Binance..."):
-            df = TitanEngine.get_klines(ticker, timeframe, limit)
-        
-        if not df.empty:
-            df, zones = TitanEngine.run_engine(df, int(amp), dev, int(hma_len), int(gann_len), 55, 1.5, 10)
-            last = df.iloc[-1]
-            
-            # METRICS
-            c1, c2, c3, c4 = st.columns(4)
-            c1.metric("TREND", "BULL 🟢" if last['is_bull'] else "BEAR 🔴")
-            c2.metric("FLUX", f"{last['Apex_Flux']:.2f}")
-            c3.metric("STOP", f"{last['entry_stop']:.2f}")
-            c4.metric("TP3", f"{last['tp3']:.2f}")
-            
-            # HTML REPORT
-            fg = TitanEngine.calculate_fear_greed(df)
-            spec = TitanEngine.detect_special_setups(df)
-            st.markdown(TitanEngine.generate_mobile_report(last, fg, spec), unsafe_allow_html=True)
-            
-            # TELEGRAM
-            if st.button("📢 SEND SIGNAL"):
-                msg = f"🚀 *TITAN SIGNAL* 🚀\nSymbol: {ticker}\nSide: {'LONG' if last['is_bull'] else 'SHORT'}\nEntry: {last['close']}\nStop: {last['entry_stop']}\nTP3: {last['tp3']}"
-                if send_telegram(tg_token, tg_chat, msg): st.success("SENT")
-                else: st.error("FAIL")
-# --- MOBILE OPTIMIZED REPORT GENERATOR ---
+# --- MOBILE OPTIMIZED REPORT GENERATOR (LEGACY/STANDALONE) ---
 # Uses HTML/CSS Cards instead of Wide Tables
-def generate_mobile_report(row, symbol, tf, fibs, fg_index, smart_stop):
+def generate_mobile_report_standalone(row, symbol, tf, fibs, fg_index, smart_stop):
     is_bull = row['is_bull']
     direction = "LONG 🐂" if is_bull else "SHORT 🐻"
 
@@ -752,7 +689,7 @@ def generate_mobile_report(row, symbol, tf, fibs, fg_index, smart_stop):
     """
     return report_html
 
-def send_telegram_msg(token, chat, msg):
+def send_telegram_msg_standalone(token, chat, msg):
     if not token or not chat:
         return False
     try:
@@ -766,7 +703,7 @@ def send_telegram_msg(token, chat, msg):
         return False
 
 @st.cache_data(ttl=5)
-def get_klines(symbol_bin, interval, limit):
+def get_klines_standalone(symbol_bin, interval, limit):
     try:
         r = requests.get(
             f"{BINANCE_API_BASE}/klines",
@@ -783,7 +720,15 @@ def get_klines(symbol_bin, interval, limit):
         pass
     return pd.DataFrame()
 
-def run_engines(df, amp, dev, hma_l, tp1, tp2, tp3, mf_l, vol_l, gann_l):
+def calculate_hma(series, length):
+    half_len = int(length / 2)
+    sqrt_len = int(math.sqrt(length))
+    wma_f = series.rolling(length).mean()
+    wma_h = series.rolling(half_len).mean()
+    diff = 2 * wma_h - wma_f
+    return diff.rolling(sqrt_len).mean()
+
+def run_engines_standalone(df, amp, dev, hma_l, tp1, tp2, tp3, mf_l, vol_l, gann_l):
     if df.empty:
         return df
     df = df.copy().reset_index(drop=True)
@@ -913,6 +858,70 @@ def run_engines(df, amp, dev, hma_l, tp1, tp2, tp3, mf_l, vol_l, gann_l):
 
     return df
 
+# =============================================================================
+# 6. MAIN CONTROLLER
+# =============================================================================
+def main():
+    # SIDEBAR CONTROLLER
+    st.sidebar.header("💠 MEGA-STATION")
+    mode = st.sidebar.radio("ENGINE MODE", ["TITAN MOBILE (Crypto)", "AXIOM QUANT (Stocks)"])
+    
+    with st.sidebar.expander("🔐 KEYS"):
+        tg_token = st.text_input("Bot Token", value=SecretsManager.get("TELEGRAM_TOKEN"), type="password")
+        tg_chat = st.text_input("Chat ID", value=SecretsManager.get("TELEGRAM_CHAT_ID"))
+        ai_key = st.text_input("AI Key", value=SecretsManager.get("OPENAI_API_KEY"), type="password")
+
+    # -------------------------------------------------------------------------
+    # MODE 1: TITAN MOBILE (Binance)
+    # -------------------------------------------------------------------------
+    if mode == "TITAN MOBILE (Crypto)":
+        st.sidebar.subheader("📡 BINANCE FEED")
+        bases = TitanEngine.get_binance_bases()
+        idx = bases.index("BTC") if "BTC" in bases else 0
+        base = st.sidebar.selectbox("Asset", bases, index=idx)
+        ticker = f"{base}USDT"
+        
+        c1, c2 = st.sidebar.columns(2)
+        with c1: timeframe = st.selectbox("TF", ["15m", "1h", "4h", "1d"], index=1)
+        with c2: limit = st.slider("Depth", 100, 500, 200, 50)
+        
+        st.sidebar.markdown("---")
+        st.sidebar.subheader("🧠 LOGIC")
+        amp = st.sidebar.number_input("Amplitude", 2, 100, 10)
+        dev = st.sidebar.number_input("Deviation", 0.5, 5.0, 3.0)
+        hma_len = st.sidebar.number_input("HMA Len", 10, 200, 50)
+        gann_len = st.sidebar.number_input("Gann Len", 2, 50, 3)
+
+        # MAIN UI TITAN
+        st.title(f"💠 TITAN: {base}")
+        Visuals.render_titan_clock()
+        Visuals.render_titan_tape(ticker)
+        
+        with st.spinner("Connecting to Binance..."):
+            df = TitanEngine.get_klines(ticker, timeframe, limit)
+        
+        if not df.empty:
+            df, zones = TitanEngine.run_engine(df, int(amp), dev, int(hma_len), int(gann_len), 55, 1.5, 10)
+            last = df.iloc[-1]
+            
+            # METRICS
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric("TREND", "BULL 🟢" if last['is_bull'] else "BEAR 🔴")
+            c2.metric("FLUX", f"{last['Apex_Flux']:.2f}")
+            c3.metric("STOP", f"{last['entry_stop']:.2f}")
+            c4.metric("TP3", f"{last['tp3']:.2f}")
+            
+            # HTML REPORT
+            fg = TitanEngine.calculate_fear_greed(df)
+            spec = TitanEngine.detect_special_setups(df)
+            st.markdown(TitanEngine.generate_mobile_report(last, fg, spec), unsafe_allow_html=True)
+            
+            # TELEGRAM
+            if st.button("📢 SEND SIGNAL"):
+                msg = f"🚀 *TITAN SIGNAL* 🚀\nSymbol: {ticker}\nSide: {'LONG' if last['is_bull'] else 'SHORT'}\nEntry: {last['close']}\nStop: {last['entry_stop']}\nTP3: {last['tp3']}"
+                if send_telegram(tg_token, tg_chat, msg): st.success("SENT")
+                else: st.error("FAIL")
+            
             # CHART
             fig = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.7, 0.3], vertical_spacing=0.05)
             fig.add_trace(go.Candlestick(x=df['timestamp'], open=df['open'], high=df['high'], low=df['low'], close=df['close'], name='Price'), row=1, col=1)
