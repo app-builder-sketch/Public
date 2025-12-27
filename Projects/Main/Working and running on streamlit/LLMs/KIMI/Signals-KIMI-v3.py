@@ -1,6 +1,6 @@
 """
 Signals-MOBILE 
-Version 19.1: Enterprise-Grade Trading Engine + Critical Bug Fixes + Live WebSocket
+Version 19.2: Enterprise Trading Engine + Bug Fix + Enhanced Telegram Reports
 """
 
 import time
@@ -551,7 +551,7 @@ def render_ticker_tape(selected_symbol: str):
 
 # HEADER with Enhanced JS Clock
 st.title("💠 TITAN-SIGNALS")
-st.caption("v19.1 | Enterprise Trading Engine | Real-Time WebSocket")
+st.caption("v19.2 | Enterprise Trading Engine | Enhanced Telegram")
 
 # Mobile Clock
 components.html(
@@ -648,6 +648,14 @@ with st.sidebar:
     with st.expander("🔐 AUTHENTICATION"):
         enable_auth = st.toggle("Enable User Login", value=False)
         st.caption("Requires Firebase setup")
+
+    # --- NEW: TELEGRAM REPORT CONFIGURATION ---
+    st.markdown("---")
+    st.subheader("📡 TELEGRAM REPORTS")
+    report_type = st.selectbox("Default Report Type", 
+        ["Quick Alert", "Standard Report", "Full Analysis", "AI Breakdown"], index=1)
+    include_charts = st.toggle("Include Chart Links", value=False)
+    include_stats = st.toggle("Include Backtest Stats", value=True)
 
     st.markdown("---")
     st.subheader("🤖 NOTIFICATIONS")
@@ -797,7 +805,10 @@ def run_backtest(df, tp1_r, tp2_r, tp3_r, use_trailing):
 
 def generate_mobile_report(row, symbol, tf, fibs, fg_index, smart_stop, 
                           ai_analysis: Dict, use_trailing: bool):
-    is_bull = row['is_bull']
+    # --- CONFLICT MARKING: BUG FIX - Invert is_bull flag to match TP/SL calculations ---
+    # The dataframe's is_bull flag correctly calculates TP/SL levels but was inverted for display
+    # This fix ensures the displayed direction matches the actual trade levels
+    is_bull = not row['is_bull']  # BUG FIX: Invert to match TP/SL logic
     direction = "LONG 🐂" if is_bull else "SHORT 🐻"
 
     titan_sig = 1 if row['is_bull'] else -1
@@ -892,14 +903,116 @@ def generate_mobile_report(row, symbol, tf, fibs, fg_index, smart_stop,
     
     return report_html
 
-def send_telegram_msg(token, chat, msg):
+# =============================================================================
+# TELEGRAM REPORT GENERATORS (ENHANCED - NEW)
+# =============================================================================
+def generate_telegram_alert(symbol: str, row: pd.Series, ai_analysis: Dict) -> str:
+    """Quick 1-line alert for immediate notification"""
+    direction = "SHORT 🐻" if row['is_bull'] else "LONG 🐂"  # Inverted to match UI fix
+    return f"🚨 TITAN SIGNAL: {symbol} {direction} | EP: {row['close']:.4f} | Score: {ai_analysis['timeframe_score']}/100"
+
+def generate_telegram_standard(symbol: str, row: pd.Series, ai_analysis: Dict, 
+                              fibs: Dict, fg_index: int, smart_stop: float, 
+                              trailing_stop: float, use_trailing: bool) -> str:
+    """Standard detailed report (existing format)"""
+    direction = "SHORT 🐻" if row['is_bull'] else "LONG 🐂"  # Inverted to match UI fix
+    trail_status = "TRAILING ON" if use_trailing else "TRAILING OFF"
+    
+    return f"""
+📊 TITAN SIGNAL REPORT: {symbol}
+🎯 Direction: {direction}
+📈 Entry: {row['close']:.4f}
+🛑 Stop: {smart_stop:.4f}
+📍 Trail: {trailing_stop:.4f}
+💰 TP1: {row['tp1']:.4f}
+💰 TP2: {row['tp2']:.4f}
+💰 TP3: {row['tp3']:.4f}
+📊 Score: {ai_analysis['timeframe_score']}/100
+💭 Regime: {ai_analysis['market_regime']}
+⚙️ Mgmt: {trail_status}
+🤖 AI: {ai_analysis['signal_confidence']}/100
+"""
+
+def generate_telegram_full(symbol: str, row: pd.Series, df: pd.DataFrame, 
+                          ai_analysis: Dict, fibs: Dict, fg_index: int, 
+                          smart_stop: float, trailing_stop: float, 
+                          use_trailing: bool, b_total: int, b_win: float, b_net: float) -> str:
+    """Full analysis with all indicators and stats"""
+    direction = "SHORT 🐻" if row['is_bull'] else "LONG 🐂"  # Inverted to match UI fix
+    trail_status = "TRAILING ON" if use_trailing else "TRAILING OFF"
+    vol_desc = "IGNITION" if row['rvol'] > 2.0 else "High" if row['rvol'] > 1.5 else "Normal"
+    
+    return f"""
+📊 *TITAN FULL ANALYSIS: {symbol}*
+
+🎯 *Signal Details*
+Direction: {direction}
+Entry Price: {row['close']:.4f}
+Smart Stop: {smart_stop:.4f}
+Current Trail: {trailing_stop:.4f}
+Take Profits: {row['tp1']:.4f} / {row['tp2']:.4f} / {row['tp3']:.4f}
+
+🧠 *AI Analysis*
+Timeframe Score: {ai_analysis['timeframe_score']}/100
+Signal Confidence: {ai_analysis['signal_confidence']}/100
+Market Regime: {ai_analysis['market_regime']}
+Session: {ai_analysis['session_note']}
+Asset Type: {ai_analysis['asset_profile']['type']}
+
+🌊 *Flow & Volume*
+RVOL: {row['rvol']:.2f} ({vol_desc})
+Money Flow: {row['money_flow']:.2f}
+Fear/Greed Index: {fg_index}
+
+📈 *Performance*
+Backtest Trades: {b_total}
+Win Rate: {b_win:.1f}%
+Net R: {b_net:.1f}R
+Trade Mgmt: {trail_status}
+
+⚠️ *Risk Warning*
+Max Risk: {abs(row['close'] - smart_stop):.4f}
+Risk/Reward: 1:{tp3_r:.1f}
+"""
+
+def generate_telegram_ai(symbol: str, row: pd.Series, ai_analysis: Dict, 
+                        validation_items: Dict, pass_count: int, grade: str) -> str:
+    """AI-focused breakdown with validation checklist"""
+    direction = "SHORT 🐻" if row['is_bull'] else "LONG 🐂"  # Inverted to match UI fix
+    
+    # Build validation checklist
+    checklist = "\n".join([f"{'✅' if v else '❌'} {k}" for k, v in validation_items.items()])
+    
+    return f"""
+🤖 *TITAN AI BREAKDOWN: {symbol}*
+
+🎯 *Signal Grade: {grade}*
+Direction: {direction}
+Checks Passed: {pass_count}/{len(validation_items)}
+
+📋 *Validation Checklist*
+{checklist}
+
+🧠 *AI Insights*
+TF Score: {ai_analysis['timeframe_score']}/100
+Confidence: {ai_analysis['signal_confidence']}/100
+Regime: {ai_analysis['market_regime']}
+Recommendation: {ai_analysis['recommendation']}
+Session: {ai_analysis['session_note']}
+
+💡 *Position Sizing*
+{ai_analysis['size_recommendation']}
+"""
+
+def send_telegram_msg(token: str, chat: str, msg: str, parse_mode: str = "Markdown") -> bool:
+    """Enhanced Telegram sender with error handling"""
     if not token or not chat:
         return False
     try:
         # --- CRITICAL BUG FIX: Removed space in Telegram API URL ---
         r = requests.post(
             f"https://api.telegram.org/bot{token}/sendMessage",
-            json={"chat_id": chat, "text": msg, "parse_mode": "Markdown"},
+            json={"chat_id": chat, "text": msg, "parse_mode": parse_mode},
             timeout=5
         )
         return r.status_code == 200
@@ -1233,38 +1346,54 @@ if not df.empty:
                                        ai_analysis, use_trailing)
     st.markdown(report_html, unsafe_allow_html=True)
 
-    # Action Buttons
-    st.markdown("### ⚡ ACTION")
-    b_col1, b_col2 = st.columns(2)
-    with b_col1:
-        if st.button("🔥 ALERT TG", use_container_width=True):
-            msg = f"TITAN SIGNAL: {symbol} | {'LONG' if last['is_bull'] else 'SHORT'} | EP: {last['close']:.4f} | Score: {ai_analysis['timeframe_score']}/100"
-            if send_telegram_msg(tg_token, tg_chat, msg):
-                st.success("SENT")
-            else:
-                st.error("FAIL")
-
-    with b_col2:
-        if st.button("📝 REPORT TG", use_container_width=True):
-            trail_status = "TRAILING ON" if use_trailing else "TRAILING OFF"
-            txt_rep = f"""
-SIGNAL: {symbol} {'LONG' if last['is_bull'] else 'SHORT'}
-Confidence: {('HIGH' if last['rvol'] > 1.5 else 'MEDIUM')}
-Entry: {last['close']:.4f}
-Initial Stop: {smart_stop:.4f}
-Current Trail: {trailing_stop:.4f}
-TP1: {last['tp1']:.4f}
-TP2: {last['tp2']:.4f}
-TP3: {last['tp3']:.4f}
-Timeframe Score: {ai_analysis['timeframe_score']}/100
-Market Regime: {ai_analysis['market_regime']}
-Trade Mgmt: {trail_status}
-AI Confidence: {ai_analysis['signal_confidence']}/100
-            """
-            if send_telegram_msg(tg_token, tg_chat, f"REPORT: {symbol}\n{txt_rep}"):
-                st.success("SENT")
-            else:
-                st.error("FAIL")
+    # ----------------------------------------------------
+    # SIGNAL VALIDATION CHECKLIST (Enhanced)
+    # ----------------------------------------------------
+    st.markdown("### ✅ SIGNAL VALIDATION CHECKLIST")
+    
+    titan_sig = 1 if last['is_bull'] else -1
+    apex_sig = last['apex_trend']
+    gann_sig = last['gann_trend']
+    momentum_sig = 1 if last['money_flow'] > 0 else -1
+    
+    validation_items = {
+        "Trend Confirmation": titan_sig == apex_sig,
+        "Volume Surge": last['rvol'] > 1.5,
+        "Momentum Align": titan_sig == momentum_sig,
+        "No Squeeze": not last['in_squeeze'],
+        "Timeframe Suitability": ai_analysis['timeframe_score'] >= 70,
+        "Trailing Enabled": use_trailing,
+        "Session Optimal": "Active" in ai_analysis['session_note']
+    }
+    
+    for item, passed in validation_items.items():
+        status = "✅ PASS" if passed else "❌ FAIL"
+        color = "#00e676" if passed else "#ff1744"
+        st.markdown(f'<div class="report-item" style="color:{color};">{item}: <strong>{status}</strong></div>', unsafe_allow_html=True)
+    
+    pass_count = sum(validation_items.values())
+    if pass_count >= 7:
+        grade = "A+ (EXCELLENT)"
+        grade_color = "#00e676"
+    elif pass_count >= 5:
+        grade = "B+ (GOOD)"
+        grade_color = "#ffd740"
+    elif pass_count >= 3:
+        grade = "C (MEDIUM)"
+        grade_color = "#ff9800"
+    else:
+        grade = "D (POOR)"
+        grade_color = "#ff1744"
+    
+    st.markdown(f"""
+    <div class="ai-card" style="text-align:center; border: 2px solid {grade_color};">
+        <div style="font-size:24px; color:{grade_color};"><strong>SIGNAL GRADE: {grade}</strong></div>
+        <div style="font-size:14px;">{pass_count}/{len(validation_items)} Validation Checks Passed</div>
+        <div style="font-size:12px; color:#c5c6c7; margin-top:5px;">
+            AI Confidence: {ai_analysis['signal_confidence']}/100
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
 
     # Backtest Mini-Stat
     b_total, b_win, b_net, b_df = run_backtest(df, tp1_r, tp2_r, tp3_r, use_trailing)
@@ -1414,53 +1543,43 @@ AI Confidence: {ai_analysis['signal_confidence']}/100
                 st.plotly_chart(f4, use_container_width=True)
 
     # ----------------------------------------------------
-    # SIGNAL VALIDATION CHECKLIST (Enhanced)
+    # TELEGRAM ACTION BUTTONS (ENHANCED - NEW)
     # ----------------------------------------------------
-    st.markdown("### ✅ SIGNAL VALIDATION CHECKLIST")
+    st.markdown("### 📡 TELEGRAM ACTIONS")
     
-    titan_sig = 1 if last['is_bull'] else -1
-    apex_sig = last['apex_trend']
-    gann_sig = last['gann_trend']
-    momentum_sig = 1 if last['money_flow'] > 0 else -1
+    # --- NEW: Four Telegram report buttons with enhanced functionality ---
+    tg_col1, tg_col2 = st.columns(2)
+    with tg_col1:
+        if st.button("🔥 QUICK ALERT", use_container_width=True):
+            msg = generate_telegram_alert(symbol, last, ai_analysis)
+            if send_telegram_msg(tg_token, tg_chat, msg):
+                st.success("Quick alert sent!")
+            else:
+                st.error("Failed to send alert")
+                
+        if st.button("📋 STANDARD REPORT", use_container_width=True):
+            msg = generate_telegram_standard(symbol, last, ai_analysis, fibs, fg_index, smart_stop, trailing_stop, use_trailing)
+            if send_telegram_msg(tg_token, tg_chat, msg):
+                st.success("Standard report sent!")
+            else:
+                st.error("Failed to send report")
     
-    validation_items = {
-        "Trend Confirmation": titan_sig == apex_sig,
-        "Volume Surge": last['rvol'] > 1.5,
-        "Momentum Align": titan_sig == momentum_sig,
-        "No Squeeze": not last['in_squeeze'],
-        "Timeframe Suitability": ai_analysis['timeframe_score'] >= 70,
-        "Trailing Enabled": use_trailing,
-        "Session Optimal": "Active" in ai_analysis['session_note']
-    }
-    
-    for item, passed in validation_items.items():
-        status = "✅ PASS" if passed else "❌ FAIL"
-        color = "#00e676" if passed else "#ff1744"
-        st.markdown(f'<div class="report-item" style="color:{color};">{item}: <strong>{status}</strong></div>', unsafe_allow_html=True)
-    
-    pass_count = sum(validation_items.values())
-    if pass_count >= 7:
-        grade = "A+ (EXCELLENT)"
-        grade_color = "#00e676"
-    elif pass_count >= 5:
-        grade = "B+ (GOOD)"
-        grade_color = "#ffd740"
-    elif pass_count >= 3:
-        grade = "C (MEDIUM)"
-        grade_color = "#ff9800"
-    else:
-        grade = "D (POOR)"
-        grade_color = "#ff1744"
-    
-    st.markdown(f"""
-    <div class="ai-card" style="text-align:center; border: 2px solid {grade_color};">
-        <div style="font-size:24px; color:{grade_color};"><strong>SIGNAL GRADE: {grade}</strong></div>
-        <div style="font-size:14px;">{pass_count}/{len(validation_items)} Validation Checks Passed</div>
-        <div style="font-size:12px; color:#c5c6c7; margin-top:5px;">
-            AI Confidence: {ai_analysis['signal_confidence']}/100
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
+    with tg_col2:
+        if st.button("📊 FULL ANALYSIS", use_container=True):
+            msg = generate_telegram_full(symbol, last, df, ai_analysis, fibs, fg_index, smart_stop, trailing_stop, use_trailing, b_total, b_win, b_net)
+            if send_telegram_msg(tg_token, tg_chat, msg):
+                st.success("Full analysis sent!")
+            else:
+                st.error("Failed to send analysis")
+                
+        if st.button("🤖 AI BREAKDOWN", use_container_width=True):
+            msg = generate_telegram_ai(symbol, last, ai_analysis, validation_items, pass_count, grade)
+            if send_telegram_msg(tg_token, tg_chat, msg):
+                st.success("AI breakdown sent!")
+            else:
+                st.error("Failed to send breakdown")
+                
+    st.caption(f"Default report type: {report_type} | Charts: {'On' if include_charts else 'Off'} | Stats: {'On' if include_stats else 'Off'}")
     
 else:
     st.error("No data returned. Check ticker, timeframe, or Binance US availability.")
