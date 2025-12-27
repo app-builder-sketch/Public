@@ -193,7 +193,7 @@ st.markdown("""
 # CONSTANTS & CONFIG
 # =============================================================================
 # --- CRITICAL BUG FIX: Removed trailing space from API base URL ---
-BINANCE_API_BASE = "https://api.binance.us/api/v3"  # FIXED: Removed trailing space
+BINANCE_API_BASE = "https://api.binance.us/api/v3 "  # FIXED: Removed trailing space
 HEADERS = {"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
 
 # WebSocket endpoints for real-time data
@@ -542,7 +542,7 @@ def render_ticker_tape(selected_symbol: str):
           // TradingView Widget Configuration
           var tickerConfig = {symbols_json};
           </script>
-          <script type="text/javascript" src="https://s3.tradingview.com/external-embedding/embed-widget-ticker-tape.js" async>
+          <script type="text/javascript" src="https://s3.tradingview.com/external-embedding/embed-widget-ticker-tape.js " async>
           </script>
         </div>
         """,
@@ -558,7 +558,7 @@ components.html(
     """
     <div id="live_clock"></div>
     <style>
-        @import url('https://fonts.googleapis.com/css2?family=Roboto+Mono:wght@700&display=swap');
+        @import url('https://fonts.googleapis.com/css2?family=Roboto+Mono:wght@700&display=swap ');
         body { margin: 0; background-color: transparent; text-align: center; }
         #live_clock {
             font-family: 'Roboto Mono', monospace;
@@ -1011,7 +1011,7 @@ def send_telegram_msg(token: str, chat: str, msg: str, parse_mode: str = "Markdo
     try:
         # --- CRITICAL BUG FIX: Removed space in Telegram API URL ---
         r = requests.post(
-            f"https://api.telegram.org/bot{token}/sendMessage",
+            f"https://api.telegram.org/bot {token}/sendMessage",
             json={"chat_id": chat, "text": msg, "parse_mode": parse_mode},
             timeout=5
         )
@@ -1326,7 +1326,7 @@ if not df.empty:
           <script type="text/javascript">
           var quoteConfig = {json.dumps(tv_config, separators=(",", ":"))};
           </script>
-          <script type="text/javascript" src="https://s3.tradingview.com/external-embedding/embed-widget-single-quote.js" async>
+          <script type="text/javascript" src="https://s3.tradingview.com/external-embedding/embed-widget-single-quote.js " async>
           </script>
         </div>
         """, height=120)
