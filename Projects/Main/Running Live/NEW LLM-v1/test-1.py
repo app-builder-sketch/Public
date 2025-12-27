@@ -33,8 +33,10 @@ THIS SYSTEM RELIES ON THE EXACT PRESENCE OF ALL LISTED COMPONENTS:
    - VOLUME: VPVR (Volume Profile Visible Range) & POC.
 
 [3. INTELLIGENCE & BROADCAST]
-   - AI: OpenAI GPT-4o Integration (Context-Aware Analyst).
-   - SOCIAL: Telegram (Photo/Text Splitting) & Twitter Integration.
+   - AI: OpenAI/Google Key Auto-Load from Secrets.
+   - AI ANALYST: Full Dashboard Context (Seasonality, Correlation, Physics, MTF).
+   - SOCIAL: Telegram Signal 1 (Technical Alert).
+   - SOCIAL: Telegram Signal 2 (Full AI Analysis Report).
    - ALERTS: Fear & Greed V4, FOMO/Panic Detection.
 
 [4. UI/UX ARCHITECTURE]
@@ -977,26 +979,45 @@ class QuantEngine:
 
 class Intelligence:
     @staticmethod
-    def ask_ai_analyst(df, ticker, fund, interval, key):
-        if not key: return "⚠️ Waiting for OpenAI API Key..."
+    def ask_ai_analyst(df, ticker, fund, interval, key, seasonality, correlations, poc, mtf):
+        if not key: return "⚠️ Waiting for OpenAI/Google API Key..."
         last = df.iloc[-1]
         gm_score = last['GM_Score']
         gm_verdict = "STRONG BUY" if gm_score >= 3 else "STRONG SELL" if gm_score <= -3 else "NEUTRAL"
         
-        fund_txt = f"P/E {fund.get('P/E Ratio','N/A')}" if fund else "N/A"
+        fund_txt = f"P/E {fund.get('P/E Ratio','N/A')}, Cap {fund.get('Market Cap','N/A')}" if fund else "N/A"
         psych = "FOMO" if last['IS_FOMO'] else "PANIC" if last['IS_PANIC'] else "Normal"
+        
+        # Format Complex Data for AI Context
+        corr_txt = correlations.to_string() if correlations is not None else "N/A"
+        mtf_txt = mtf.to_string() if mtf is not None else "N/A"
+        seas_txt = "Available" if seasonality else "N/A"
         
         prompt = f"""
         Analyze {ticker} ({interval}) at ${last['Close']:.2f}.
-        Techs: Trend {last['Apex_Trend']}, RSI {last['RSI']:.1f}, RVOL {last['RVOL']:.1f}x.
-        God Mode Score: {gm_score} ({gm_verdict}).
-        Physics: Entropy {last['CHEDO']:.2f}, Flux {last['Apex_Flux']:.2f}.
-        Psychology: {psych}. Fundamentals: {fund_txt}.
+        
+        [1. GOD MODE TECHS]
+        Score: {gm_score} ({gm_verdict})
+        Trend: {last['Apex_Trend']} (1=Bull, -1=Bear)
+        RSI: {last['RSI']:.1f}, RVOL: {last['RVOL']:.1f}x
+        
+        [2. PHYSICS ENGINE]
+        Entropy (CHEDO): {last['CHEDO']:.2f}
+        Flux (Vector): {last['Apex_Flux']:.2f}
+        Relativity (RQZO): {last['RQZO']:.4f}
+        
+        [3. FULL DASHBOARD METRICS]
+        Psychology: {psych}
+        Fundamentals: {fund_txt}
+        Volume POC: {poc:.2f}
+        Multi-Timeframe: {mtf_txt}
+        Correlations: {corr_txt}
+        Seasonality Data: {seas_txt}
         
         Mission:
-        1. Analyze Market Structure (Trend vs Chop).
-        2. Correlate Technicals with Physics/Sentiment.
-        3. Provide Outlook.
+        1. Synthesize all 3 layers (Techs, Physics, Dashboard Data).
+        2. Provide a specific outlook based on the God Mode Score + MTF Trend.
+        3. Mention any specific correlations or seasonal risks if relevant.
         Use Emojis. No financial advice.
         """
         try:
@@ -1043,10 +1064,13 @@ def main():
     is_mobile = st.sidebar.toggle("📱 Mobile Optimized", value=True)
     inject_merged_css(is_mobile)
     
-    # Secrets
+    # Secrets (Auto-load logic for Google/OpenAI Key)
     tg_token = st.sidebar.text_input("Bot Token", value=SecretsManager.get("TELEGRAM_TOKEN"), type="password")
     tg_chat = st.sidebar.text_input("Chat ID", value=SecretsManager.get("TELEGRAM_CHAT_ID"))
-    ai_key = st.sidebar.text_input("AI Key", value=SecretsManager.get("OPENAI_API_KEY"), type="password")
+    
+    # Priority: OpenAI Key -> Google Key (loaded into same variable for Intelligence class)
+    auto_key = SecretsManager.get("OPENAI_API_KEY") or SecretsManager.get("GOOGLE_API_KEY")
+    ai_key = st.sidebar.text_input("AI Key (OpenAI/Google)", value=auto_key, type="password")
 
     # --- MODE 1: TITAN (LEGACY) ---
     if mode == "TITAN MOBILE (Crypto/Binance)":
@@ -1125,7 +1149,16 @@ def main():
                     df = QuantEngine.calc_indicators(df)
                     df = QuantEngine.calc_fear_greed_v4(df)
                     last = df.iloc[-1]
+                    
+                    # Pre-Calculate Full Dashboard Metrics for AI
                     fund = DataService.get_fundamentals(ticker)
+                    seas = DataService.get_seasonality_stats(ticker)
+                    corr = QuantEngine.calc_correlations(ticker)
+                    mtf = QuantEngine.calc_mtf_trend(ticker)
+                    vp, poc = QuantEngine.calc_volume_profile(df)
+                    
+                    # AI Analysis
+                    ai_report = Intelligence.ask_ai_analyst(df, ticker, fund, tf, ai_key, seas, corr, poc, mtf)
                     
                     # TABS
                     t1, t2, t3, t4, t5, t6, t7 = st.tabs(["📊 God Mode", "🌍 Fundamentals", "📅 Seasonality", "📆 DNA", "🧩 Correlation", "🔮 Quant", "📡 Broadcast"])
@@ -1137,7 +1170,7 @@ def main():
                             st.metric("God Mode Score", f"{last['GM_Score']:.0f}/5")
                             st.metric("Apex Trend", "BULL" if last['Apex_Trend']==1 else "BEAR")
                             st.metric("Entropy", f"{last['CHEDO']:.2f}")
-                            st.info(Intelligence.ask_ai_analyst(df, ticker, fund, tf, ai_key))
+                            st.info(ai_report)
                     
                     with t2:
                         if fund: 
@@ -1149,7 +1182,6 @@ def main():
                         if perf is not None: st.bar_chart(perf)
 
                     with t3:
-                        seas = DataService.get_seasonality_stats(ticker)
                         if seas: 
                             hm, hold, month = seas
                             st.plotly_chart(px.imshow(hm, color_continuous_scale='RdYlGn'), use_container_width=True)
@@ -1165,8 +1197,6 @@ def main():
                         if hr_dna is not None: st.bar_chart(hr_dna['Win Rate'])
 
                     with t5:
-                        corr = QuantEngine.calc_correlations(ticker)
-                        mtf = QuantEngine.calc_mtf_trend(ticker)
                         c1, c2 = st.columns(2)
                         if corr is not None: c1.dataframe(corr)
                         c2.dataframe(mtf)
@@ -1174,14 +1204,22 @@ def main():
                     with t6:
                         mc = QuantEngine.run_monte_carlo(df)
                         st.line_chart(mc[:, :30])
-                        vp, poc = QuantEngine.calc_volume_profile(df)
                         st.caption(f"POC: {poc:.2f}")
                         st.bar_chart(vp.set_index('Price')['Volume'])
 
                     with t7:
                         msg = f"🔥 {ticker} God Mode: {last['GM_Score']:.0f}/5 | Price: {last['Close']:.2f}"
-                        if st.button("Send Telegram"):
-                            if send_telegram(tg_token, tg_chat, msg): st.success("Sent")
+                        c1, c2 = st.columns(2)
+                        
+                        # Signal 1: Technical
+                        if c1.button("Send Technical Alert (Telegram)"):
+                            if send_telegram(tg_token, tg_chat, msg): st.success("Technical Alert Sent")
+                            else: st.error("Check Keys")
+                        
+                        # Signal 2: AI Report (New Feature)
+                        if c2.button("📡 Send AI Strategy Report (Telegram)"):
+                            full_report = f"{msg}\n\n🤖 AI ANALYSIS:\n{ai_report}"
+                            if send_telegram(tg_token, tg_chat, full_report): st.success("Full Report Sent")
                             else: st.error("Check Keys")
                         
                         # TradingView Embed
