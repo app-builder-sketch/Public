@@ -296,7 +296,7 @@ class GlobalVisuals:
             <div class="ticker-wrap">
                 <div class="ticker">
                     {" | ".join([f"<span class='ticker-item'>{i}</span>" for i in items])}
-                     | {" | ".join([f"<span class='ticker-item'>{i}</span>" for i in items])}
+                      | {" | ".join([f"<span class='ticker-item'>{i}</span>" for i in items])}
                 </div>
             </div>
             """
@@ -744,7 +744,8 @@ class QuantEngine:
         df['Apex_Upper'] = df['Apex_Base'] + (df['Apex_ATR'] * apex_mult)
         df['Apex_Lower'] = df['Apex_Base'] - (df['Apex_ATR'] * apex_mult)
         df['Apex_Trend'] = np.where(df['Close'] > df['Apex_Upper'], 1, np.where(df['Close'] < df['Apex_Lower'], -1, 0))
-        df['Apex_Trend'] = df['Apex_Trend'].replace(to_replace=0, method='ffill')
+        # FIX: replace(method='ffill') is deprecated in Pandas 2.1+
+        df['Apex_Trend'] = df['Apex_Trend'].replace(0, np.nan).ffill().fillna(0)
 
         # DarkPool Squeeze
         df['Sqz_Basis'] = df['Close'].rolling(20).mean()
@@ -771,7 +772,8 @@ class QuantEngine:
         df['VS_Low'] = df['Low'].rolling(amp).min()
         df['VS_High'] = df['High'].rolling(amp).max()
         df['VS_Trend'] = np.where(df['Close'] > df['VS_High'].shift(1), 1, np.where(df['Close'] < df['VS_Low'].shift(1), -1, 0))
-        df['VS_Trend'] = df['VS_Trend'].replace(to_replace=0, method='ffill')
+        # FIX: replace(method='ffill') is deprecated
+        df['VS_Trend'] = df['VS_Trend'].replace(0, np.nan).ffill().fillna(0)
 
         # Advanced Volume & EVWM
         df['RVOL'] = df['Volume'] / df['Volume'].rolling(20).mean()
@@ -787,7 +789,8 @@ class QuantEngine:
         df['Gann_High'] = df['High'].rolling(gann_len).mean()
         df['Gann_Low'] = df['Low'].rolling(gann_len).mean()
         df['Gann_Trend'] = np.where(df['Close'] > df['Gann_High'].shift(1), 1, np.where(df['Close'] < df['Gann_Low'].shift(1), -1, 0))
-        df['Gann_Trend'] = df['Gann_Trend'].replace(to_replace=0, method='ffill')
+        # FIX: replace(method='ffill') is deprecated
+        df['Gann_Trend'] = df['Gann_Trend'].replace(0, np.nan).ffill().fillna(0)
 
         # SuperTrend (Dark Vector Trend)
         st_atr = QuantEngine.calculate_atr(df, 10)
