@@ -1,11 +1,12 @@
 """
 TITAN-AXIOM INTEGRATED TRADING STATION
-Version: Unified V1.0 (Titan Mobile + Axiom Quant)
+Version: Unified V1.1 (Titan Mobile + Axiom Quant)
 Modes: 
   1. TITAN (Binance.US Direct - Crypto Scalping)
   2. AXIOM (YFinance - Stocks/Forex/Macro/AI)
 
-NO OMISSIONS - FULLY INTEGRATED - CRASH PROOF
+FIXED: Pandas replace() error resolved using .mask()
+NO OMISSIONS - FULLY INTEGRATED
 """
 
 import time
@@ -371,7 +372,13 @@ def run_master_engine(df, params):
     # 6. TARGETS
     last_stop = df['entry_stop'].iloc[-1] if not np.isnan(df['entry_stop'].iloc[-1]) else df['close'].iloc[-1]*0.95
     risk = abs(df['close'] - df['entry_stop'])
-    risk = risk.replace(0, df['close']*0.01) # Safety
+    
+    # -------------------------------------------------------------
+    # ERROR FIX: Replaced .replace(0, series) with .mask()
+    # This prevents the Pandas Value Error.
+    # -------------------------------------------------------------
+    risk = risk.mask(risk == 0, df['close'] * 0.01)
+    
     df['tp1'] = np.where(df['is_bull'], df['close'] + 1.5*risk, df['close'] - 1.5*risk)
     df['tp2'] = np.where(df['is_bull'], df['close'] + 3.0*risk, df['close'] - 3.0*risk)
     df['tp3'] = np.where(df['is_bull'], df['close'] + 5.0*risk, df['close'] - 5.0*risk)
