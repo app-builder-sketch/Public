@@ -13,3 +13,4 @@ google-generativeai
 xlsxwriter
 matplotlib
 websocket-client
+tenacity
