@@ -264,7 +264,7 @@ with st.sidebar:
             quick_base = st.selectbox("Quick Ticker", options, index=(options.index("BTC") if "BTC" in options else 0))
             q1, q2 = st.columns([1, 1])
             with q1:
-                if st.button("✅ Use Quick Ticker", use_container_width=True):
+                if st.button("Use Quick Ticker", use_container_width=True):
                     st.session_state.symbol_input = quick_base
             with q2:
                 st.caption(f"{len(bases_all)} tickers loaded")
