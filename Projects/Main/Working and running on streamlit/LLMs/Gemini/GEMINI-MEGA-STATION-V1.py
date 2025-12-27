@@ -1,9 +1,9 @@
 """
 Titan-AXIOM Mega-Station V4.0 (God Mode)
-- BEST OF EVERYTHING: Full Feature Set + Scanner + Risk Desk
+- BEST OF EVERYTHING: Full Feature Set + Scanner + Risk Desk + Telegram
 - Engines: Titan (Crypto) & Axiom (Stocks)
 - Indicators: CHEDO, RQZO, Apex Flux, SMC HMA, Fear/Greed
-- Features: Live Scanner, Heikin-Ashi, Position Sizing, AI Agent
+- Features: Live Scanner, Heikin-Ashi, Position Sizing, AI Agent, Telegram
 """
 
 import time
@@ -63,6 +63,35 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # -------------------------------------------------------------------------
+# TELEGRAM BROADCASTER MODULE
+# -------------------------------------------------------------------------
+class TelegramTransmitter:
+    """Sends Signals & Reports to Telegram."""
+    
+    BASE_URL = "https://api.telegram.org/bot"
+    
+    @staticmethod
+    def send_signal(message: str):
+        # Tries to get secrets from Streamlit, then falls back to empty strings
+        try:
+            token = st.secrets["TELEGRAM_BOT_TOKEN"]
+            chat_id = st.secrets["TELEGRAM_CHAT_ID"]
+        except:
+            st.warning("⚠️ Telegram Secrets not found. Signal not sent.")
+            return
+
+        if not token or not chat_id:
+            return
+            
+        try:
+            url = f"{TelegramTransmitter.BASE_URL}{token}/sendMessage"
+            payload = {"chat_id": chat_id, "text": message, "parse_mode": "HTML"}
+            requests.post(url, json=payload, timeout=5)
+        except Exception as e:
+            logger.error(f"Telegram Fail: {e}")
+            st.error(f"Telegram Broadcast Failed: {e}")
+
+# -------------------------------------------------------------------------
 # MATH KERNEL (THE BRAIN)
 # -------------------------------------------------------------------------
 class TitanMath:
@@ -77,7 +106,7 @@ class TitanMath:
         """Converts standard OHLC to Heikin-Ashi for trend visualization."""
         ha = df.copy()
         ha['close'] = (df['open'] + df['high'] + df['low'] + df['close']) / 4
-        # Initialize open (this is a simplified vectorized approach)
+        # Initialize open (simplified vectorized approach)
         ha['open'] = (df['open'].shift(1) + df['close'].shift(1)) / 2
         ha['open'].iloc[0] = df['open'].iloc[0]
         ha['high'] = ha[['high', 'open', 'close']].max(axis=1)
@@ -294,6 +323,7 @@ def render_risk_desk(last_price: float, atr: float):
     
     risk_amt = acct * (risk_pct / 100)
     stop_dist = atr * stop_atr_mult
+    if stop_dist == 0: stop_dist = 0.0001 # Prevent div by zero
     position_size = risk_amt / stop_dist
     
     st.success(f"**Position Size:** {position_size:.4f} units")
@@ -376,10 +406,30 @@ def main():
                         fig.update_layout(height=650, template="plotly_dark", margin=dict(l=0,r=0,t=0,b=0))
                         st.plotly_chart(fig, use_container_width=True)
                         
-                        # AI Section
+                        # TELEGRAM & AI SECTION
+                        st.markdown("### 📡 Command Center")
+                        
+                        # AI Analysis
+                        ai_msg = "AI Analysis Skipped (No Key)"
                         if api_key:
-                            st.info(f"🤖 **Titan AI:** {AxiomEngine.analyze_ai(symbol, last, api_key)}")
-                    
+                            ai_msg = AxiomEngine.analyze_ai(symbol, last, api_key)
+                            st.info(f"🤖 **Titan AI:** {ai_msg}")
+                        
+                        # Telegram Button
+                        if st.button("📡 BROADCAST SIGNAL TO TELEGRAM"):
+                            trend_emoji = "🟢" if last['is_bull'] else "🔴"
+                            msg = (
+                                f"<b>🚨 TITAN SIGNAL: {symbol}</b>\n\n"
+                                f"<b>Price:</b> ${last['close']:.2f}\n"
+                                f"<b>Trend:</b> {trend_emoji} {last['Apex_Flux']:.2f} Flux\n"
+                                f"<b>Squeeze:</b> {'Active' if last['in_squeeze'] else 'Inactive'}\n"
+                                f"<b>Target:</b> ${last['tp1']:.2f}\n\n"
+                                f"<i>{ai_msg}</i>"
+                            )
+                            with st.spinner("Broadcasting..."):
+                                TelegramTransmitter.send_signal(msg)
+                                st.success("Signal Sent!")
+
                     with tab_risk:
                         render_risk_desk(last['close'], last['atr'])
                         
@@ -389,7 +439,7 @@ def main():
                     st.error("Data interception failed after retries.")
 
     else:
-        # AXIOM QUANT MODE
+        # AXIOM QUANT MODE (Stocks)
         st.header("🌐 Axiom Quant Terminal")
         c1, c2 = st.columns(2)
         ac = c1.selectbox("Market Sector", ["Global Macro", "Tech Giants", "High Volatility"])
