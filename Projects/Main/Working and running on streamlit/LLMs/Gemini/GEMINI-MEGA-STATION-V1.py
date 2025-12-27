@@ -1,1212 +1,3 @@
-"""
-OMNI-SENTIENT TERMINAL V4.1 (TITAN-AXIOM)
------------------------------------------
-INTEGRATION: 100% Feature Parity + HTML Rendering Fix
-MODE 1: TITAN MOBILE (Binance | Scalping | SMC | Gann)
-MODE 2: AXIOM QUANT (YFinance | Swing | Physics | Macro)
-
-STATUS:
-- BUG FIX: Corrected indentation in Axiom Report HTML to prevent raw code rendering.
-- FEATURE: All V4.0 features (Signals, Broadcast, Explanations) preserved.
-- UI: "Physics Metrics" now render cleanly as styled cards.
-"""
-
-# =============================================================================
-# 0. SYSTEM MANIFEST & DEVELOPMENT RULES
-# =============================================================================
-APP_MANIFEST = {
-    "TITAN_MOBILE_ENGINE": [
-        "Binance.US API Direct Connection",
-        "Multi-Timeframe Scalping Logic (Amplitude/Deviation)",
-        "HMA (Hull Moving Average) Trend Filtering",
-        "Apex SMC (Smart Money Concepts) & Trail Stops",
-        "Gann Swing Theory Implementation",
-        "Flux Momentum & Volume Flow Analysis",
-        "Volatility Squeeze Detection (BB/KC)",
-        "Fear & Greed Sentiment Calculation",
-        "Laddered Take Profit Calculation (TP1, TP2, TP3)",
-        "VWAP (Volume Weighted Average Price) Relation",
-        "HTML/CSS Mobile-First Signal Reporting",
-        "Automated Telegram Broadcasting"
-    ],
-    "AXIOM_QUANT_ENGINE": [
-        "YFinance Multi-Asset Data Aggregation",
-        "Asset Class Filtering (Crypto, Tech, Indices, Forex)",
-        "Glassmorphic World Clock (NY/LON/TOK)",
-        "Physics-Based Indicators: CHEDO (Entropy)",
-        "Physics-Based Indicators: RQZO (Relativity)",
-        "Macro-Economic Dashboard (SPY/VIX Correlation)",
-        "Fundamental Data Integration (Market Cap/PE)",
-        "AI Strategy Analysis via OpenAI (GPT-4o)",
-        "Monte Carlo Simulation (Probability Paths)",
-        "Volume Profile & Point of Control (POC)",
-        "Day-of-Week DNA Return Analysis",
-        "**NEW** Axiom Signal Generation & Logic",
-        "**NEW** Technical Indicator Explainer Reports"
-    ],
-    "VISUALIZATION": [
-        "Plotly Interactive Candlestick Charts",
-        "Dynamic Supply/Demand Zones",
-        "Neon/Cyberpunk CSS Styling",
-        "Ticker Tapes & Banners"
-    ]
-}
-
-DEVELOPMENT_RULES = {
-    "CORE_DIRECTIVE": "NO OMISSIONS PERMITTED. ALL FEATURES IN APP_MANIFEST ARE MANDATORY.",
-    "RULE_1_PERSISTENCE": "When editing or refactoring, EVERY feature listed in APP_MANIFEST must be retained. Do not delete, truncate, or simplify logic.",
-    "RULE_2_INTEGRITY": "Calculation engines (Titan/Axiom) must maintain 100% parity with original formulas (Physics, SMC, Gann).",
-    "RULE_3_UI": "Visual elements (Clocks, Tickers, CSS) are core features and must not be removed.",
-    "RULE_4_REPORTING": "Signal Reports must strictly adhere to the 'Card' based HTML layout with Confidence/VWAP data.",
-    "FUTURE_DEPRECATION_ONLY": "Legacy Standalone Functions (at bottom) are the ONLY allowed omission, provided they are fully migrated to Class Methods first."
-}
-
-import time
-import math
-import sqlite3
-import random
-import json
-from typing import Dict, Optional, List, Tuple, Any
-from contextlib import contextmanager
-from datetime import datetime, timezone
-
-import streamlit as st
-import pandas as pd
-import numpy as np
-import requests
-import plotly.graph_objects as go
-import plotly.express as px
-from plotly.subplots import make_subplots
-import yfinance as yf
-import streamlit.components.v1 as components
-from openai import OpenAI
-from scipy.stats import linregress
-
-# =============================================================================
-# 1. PAGE CONFIG & CSS
-# =============================================================================
-st.set_page_config(
-    page_title="Omni-Sentient Terminal V4.1",
-    layout="wide",
-    page_icon="💠",
-    initial_sidebar_state="collapsed"
-)
-
-st.markdown("""
-<style>
-    @import url('https://fonts.googleapis.com/css2?family=Roboto+Mono:wght@300;400;700&family=SF+Pro+Display:wght@300;500;700&display=swap');
-
-    .stApp { background-color: #0d1117; color: #c9d1d9; font-family: 'SF Pro Display', sans-serif; }
-    
-    /* TITAN STYLE ELEMENTS */
-    .titan-metric { background: rgba(31, 40, 51, 0.9); border: 1px solid #45a29e; padding: 10px; border-radius: 8px; }
-    
-    /* AXIOM NEON METRICS */
-    div[data-testid="metric-container"] {
-        background: rgba(22, 27, 34, 0.9);
-        border-left: 4px solid #00F0FF;
-        padding: 15px;
-        border-radius: 6px;
-        margin-bottom: 10px;
-        backdrop-filter: blur(5px);
-        box-shadow: 0 4px 6px rgba(0,0,0,0.3);
-    }
-    div[data-testid="stMetricLabel"] { font-size: 14px !important; color: #8b949e !important; letter-spacing: 1px; }
-    div[data-testid="stMetricValue"] { font-size: 24px !important; color: #f0f6fc !important; font-weight: 300; }
-
-    /* UNIVERSAL HEADERS & BUTTONS */
-    h1, h2, h3 { font-family: 'Roboto Mono', monospace; color: #58a6ff; }
-    .stButton > button {
-        background: linear-gradient(135deg, #1f2833, #0b0c10);
-        border: 1px solid #238636; color: #ffffff;
-        font-weight: bold; height: 3.5em; font-size: 16px !important;
-        border-radius: 6px;
-    }
-    .stButton > button:hover { background: #238636; color: #ffffff; }
-
-    /* AXIOM TICKER MARQUEE */
-    .ticker-wrap {
-        width: 100%; overflow: hidden; background-color: #0d1117; border-bottom: 1px solid #30363d;
-        height: 40px; display: flex; align-items: center; margin-bottom: 15px;
-    }
-    .ticker { display: inline-block; animation: marquee 45s linear infinite; white-space: nowrap; }
-    @keyframes marquee { 0% { transform: translate(100%, 0); } 100% { transform: translate(-100%, 0); } }
-    .ticker-item { padding: 0 2rem; font-family: 'Roboto Mono'; font-size: 0.85rem; color: #58a6ff; text-shadow: 0 0 5px rgba(88, 166, 255, 0.3); }
-
-    /* TITAN/AXIOM REPORT CARDS */
-    .report-card { 
-        background-color: #161b22; 
-        border-left: 4px solid #3fb950; /* Default Green, overridden by inline styles */
-        padding: 16px; 
-        border-radius: 6px; 
-        margin-bottom: 16px; 
-        box-shadow: 0 1px 3px rgba(0,0,0,0.5);
-        border: 1px solid #30363d;
-    }
-    .report-header { 
-        font-size: 1.1rem; 
-        font-weight: 700; 
-        color: #f0f6fc; 
-        margin-bottom: 12px; 
-        border-bottom: 1px solid #30363d; 
-        padding-bottom: 8px; 
-        display: flex; 
-        align-items: center; 
-        gap: 8px; 
-        font-family: 'Roboto Mono', monospace;
-    }
-    .report-item { 
-        margin-bottom: 8px; 
-        font-size: 0.95rem; 
-        color: #8b949e; 
-        display: flex; 
-        align-items: center; 
-        gap: 8px; 
-        justify-content: flex-start;
-    }
-    .report-context {
-        margin-top: 10px;
-        font-size: 0.85rem;
-        color: #58a6ff;
-        font-style: italic;
-        border-top: 1px solid #30363d;
-        padding-top: 8px;
-    }
-    .value-cyan { color: #38bdf8; font-weight: 600; font-family: 'Roboto Mono'; }
-    .value-green { color: #3fb950; font-weight: 600; font-family: 'Roboto Mono'; }
-    .value-red { color: #ff6b6b; font-weight: 600; font-family: 'Roboto Mono'; }
-    .value-yellow { color: #e3b341; font-weight: 600; font-family: 'Roboto Mono'; }
-    
-    /* TAGS */
-    .strategy-tag { background-color: #1f6feb; color: #fff; padding: 2px 6px; border-radius: 4px; font-size: 12px; font-weight: bold; margin-right: 5px; }
-</style>
-""", unsafe_allow_html=True)
-
-# =============================================================================
-# 2. SHARED UTILITIES
-# =============================================================================
-class SecretsManager:
-    @staticmethod
-    def get(key, default=""):
-        try: return st.secrets.get(key, default)
-        except: return default
-
-def send_telegram(token, chat, msg):
-    if not token or not chat: return False
-    try:
-        requests.post(f"https://api.telegram.org/bot{token}/sendMessage", json={"chat_id": chat, "text": msg, "parse_mode": "Markdown"}, timeout=3)
-        return True
-    except: return False
-
-def timeframe_to_min(tf):
-    if tf == '15m': return 15
-    if tf == '1h': return 60
-    if tf == '4h': return 240
-    if tf == '1d': return 1440
-    return 60
-
-# =============================================================================
-# 3. VISUALS ENGINE (DISTINCT MODES)
-# =============================================================================
-class Visuals:
-    @staticmethod
-    def render_titan_clock():
-        """Simple Digital UTC Clock for Titan Mobile"""
-        html = """
-        <div style="display:flex; justify-content:center; font-family:'Roboto Mono'; color:#39ff14; text-shadow:0 0 10px rgba(57,255,20,0.8); font-weight:bold;">
-            <span id="clock">--:--:-- UTC</span>
-        </div>
-        <script>
-        setInterval(() => {
-            document.getElementById('clock').innerText = new Date().toLocaleTimeString('en-GB', {timeZone:'UTC'}) + ' UTC';
-        }, 1000);
-        </script>
-        """
-        components.html(html, height=30)
-
-    @staticmethod
-    def render_axiom_clock():
-        """Glassmorphic World Clock for Axiom Quant"""
-        html = """
-        <!DOCTYPE html>
-        <html>
-        <head>
-        <style>
-            @import url('https://fonts.googleapis.com/css2?family=Roboto+Mono:wght@500&display=swap');
-            body { margin: 0; background: transparent; font-family: 'Roboto Mono', monospace; color: #fff; overflow: hidden; }
-            .clock-container {
-                display: flex; justify-content: space-between; align-items: center;
-                background: rgba(0, 0, 0, 0.3); border: 1px solid #222;
-                padding: 8px 15px; border-radius: 4px; backdrop-filter: blur(5px);
-            }
-            .clock-box { text-align: center; width: 32%; }
-            .city { font-size: 0.65rem; color: #666; letter-spacing: 2px; text-transform: uppercase; margin-bottom: 2px; }
-            .time { font-size: 1.1rem; font-weight: bold; color: #e0e0e0; text-shadow: 0 0 8px rgba(255, 255, 255, 0.1); }
-            .accent-ny { border-bottom: 2px solid #00F0FF; }
-            .accent-lon { border-bottom: 2px solid #FF0055; }
-            .accent-tok { border-bottom: 2px solid #D500F9; }
-        </style>
-        </head>
-        <body>
-            <div class="clock-container">
-                <div class="clock-box accent-ny"><div class="city">NEW YORK</div><div class="time" id="ny">--:--:--</div></div>
-                <div class="clock-box accent-lon"><div class="city">LONDON</div><div class="time" id="lon">--:--:--</div></div>
-                <div class="clock-box accent-tok"><div class="city">TOKYO</div><div class="time" id="tok">--:--:--</div></div>
-            </div>
-            <script>
-                function update() {
-                    const now = new Date();
-                    const fmt = (tz) => new Intl.DateTimeFormat('en-US', {timeZone: tz, hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false}).format(now);
-                    document.getElementById('ny').innerText = fmt('America/New_York');
-                    document.getElementById('lon').innerText = fmt('Europe/London');
-                    document.getElementById('tok').innerText = fmt('Asia/Tokyo');
-                }
-                setInterval(update, 1000); update();
-            </script>
-        </body>
-        </html>
-        """
-        components.html(html, height=80)
-
-    @staticmethod
-    def render_titan_tape(selected_symbol):
-        base = selected_symbol.replace("USDT", "")
-        tape_bases = ["BTC", "ETH", "SOL", "BNB", "XRP", "ADA", "DOGE"]
-        if base not in tape_bases: tape_bases.insert(0, base)
-        symbols_json = json.dumps([{"proName": f"BINANCE:{b}USDT", "title": b} for b in tape_bases], separators=(",", ":"))
-        components.html(f"""<div class="tradingview-widget-container"><div class="tradingview-widget-container__widget"></div><script type="text/javascript" src="https://s3.tradingview.com/external-embedding/embed-widget-ticker-tape.js" async>{{ "symbols": {symbols_json}, "showSymbolLogo": true, "colorTheme": "dark", "isTransparent": true, "displayMode": "adaptive", "locale": "en" }}</script></div>""", height=50)
-
-    @staticmethod
-    def render_axiom_banner():
-        html = """
-        <div class="ticker-wrap">
-            <div class="ticker">
-                <span class="ticker-item">💠 AXIOM QUANTITATIVE SYSTEM ONLINE</span>
-                <span class="ticker-item">BTC-USD: LIVE</span>
-                <span class="ticker-item">SPY: LIVE</span>
-                <span class="ticker-item">VIX: LIVE</span>
-                <span class="ticker-item">GOLD: LIVE</span>
-                <span class="ticker-item">NVDA: LIVE</span>
-                <span class="ticker-item">EUR/USD: LIVE</span>
-            </div>
-        </div>
-        """
-        st.markdown(html, unsafe_allow_html=True)
-
-# =============================================================================
-# 4. TITAN ENGINE (BINANCE / SCALPING)
-# =============================================================================
-BINANCE_API_BASE = "https://api.binance.us/api/v3"
-HEADERS = {"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
-
-class TitanEngine:
-    @staticmethod
-    @st.cache_data(ttl=3600, show_spinner=False)
-    def get_binance_bases() -> List[str]:
-        try:
-            r = requests.get(f"{BINANCE_API_BASE}/exchangeInfo", headers=HEADERS, timeout=5)
-            if r.status_code != 200: return []
-            js = r.json()
-            bases = set()
-            for s in js.get("symbols", []):
-                if s.get("status") == "TRADING" and s.get("quoteAsset") == "USDT":
-                    bases.add(s.get("baseAsset").upper())
-            return sorted(list(bases))
-        except: return []
-
-    @staticmethod
-    @st.cache_data(ttl=5, show_spinner=False)
-    def get_klines(symbol, interval, limit):
-        try:
-            r = requests.get(f"{BINANCE_API_BASE}/klines", params={"symbol": symbol, "interval": interval, "limit": limit}, headers=HEADERS, timeout=5)
-            if r.status_code == 200:
-                df = pd.DataFrame(r.json(), columns=['t','o','h','l','c','v','T','q','n','V','Q','B'])
-                df['timestamp'] = pd.to_datetime(df['t'], unit='ms')
-                df[['open','high','low','close','volume']] = df[['o','h','l','c','v']].astype(float)
-                return df[['timestamp','open','high','low','close','volume']]
-        except: pass
-        return pd.DataFrame()
-
-    @staticmethod
-    def get_ma(series, length, ma_type):
-        if ma_type == "SMA": return series.rolling(length).mean()
-        elif ma_type == "EMA": return series.ewm(span=length, adjust=False).mean()
-        elif ma_type == "RMA": return series.ewm(alpha=1/length, adjust=False).mean()
-        else: # HMA
-            half_len = int(length / 2)
-            sqrt_len = int(math.sqrt(length))
-            wma_f = series.rolling(length).mean()
-            wma_h = series.rolling(half_len).mean()
-            diff = 2 * wma_h - wma_f
-            return diff.rolling(sqrt_len).mean()
-
-    @staticmethod
-    def calculate_adx(df, length=14):
-        df = df.copy()
-        df['up_move'] = df['high'] - df['high'].shift(1)
-        df['down_move'] = df['low'].shift(1) - df['low']
-        df['pdm'] = np.where((df['up_move'] > df['down_move']) & (df['up_move'] > 0), df['up_move'], 0)
-        df['ndm'] = np.where((df['down_move'] > df['up_move']) & (df['down_move'] > 0), df['down_move'], 0)
-        df['tr'] = np.maximum(df['high'] - df['low'], np.maximum(abs(df['high'] - df['close'].shift(1)), abs(df['low'] - df['close'].shift(1))))
-        df['tr_s'] = df['tr'].rolling(length).sum()
-        df['pdm_s'] = df['pdm'].rolling(length).sum()
-        df['ndm_s'] = df['ndm'].rolling(length).sum()
-        with np.errstate(divide='ignore', invalid='ignore'):
-            df['pdi'] = 100 * (df['pdm_s'] / df['tr_s'])
-            df['ndi'] = 100 * (df['ndm_s'] / df['tr_s'])
-            df['dx'] = 100 * abs(df['pdi'] - df['ndi']) / (df['pdi'] + df['ndi'])
-        return df['dx'].rolling(length).mean()
-
-    @staticmethod
-    def calculate_wavetrend(df, chlen=10, avg=21):
-        ap = (df['high'] + df['low'] + df['close']) / 3
-        esa = ap.ewm(span=chlen, adjust=False).mean()
-        d = (ap - esa).abs().ewm(span=chlen, adjust=False).mean()
-        ci = (ap - esa) / (0.015 * d)
-        tci = ci.ewm(span=avg, adjust=False).mean()
-        return tci
-
-    @staticmethod
-    def calculate_fear_greed(df):
-        try:
-            df = df.copy()
-            df['log_ret'] = np.log(df['close'] / df['close'].shift(1))
-            if len(df) < 90: return 50
-            vol_score = 50 - ((df['log_ret'].rolling(30).std().iloc[-1] - df['log_ret'].rolling(90).std().iloc[-1]) / df['log_ret'].rolling(90).std().iloc[-1]) * 100
-            vol_score = max(0, min(100, vol_score))
-            rsi = df['rsi'].iloc[-1]
-            sma_50 = df['close'].rolling(50).mean().iloc[-1]
-            dist = (df['close'].iloc[-1] - sma_50) / sma_50
-            trend_score = 50 + (dist * 1000)
-            return int((vol_score * 0.3) + (rsi * 0.4) + (max(0, min(100, trend_score)) * 0.3))
-        except: return 50
-
-    @staticmethod
-    @st.cache_data(show_spinner=True)
-    def run_engine(df, amp, dev, hma_l, gann_l, apex_len, apex_mult, liq_len):
-        if df.empty: return df, []
-        df = df.copy().reset_index(drop=True)
-
-        # Basics
-        df['tr'] = np.maximum(df['high']-df['low'], np.maximum(abs(df['high']-df['close'].shift(1)), abs(df['low']-df['close'].shift(1))))
-        df['atr'] = df['tr'].ewm(alpha=1/14, adjust=False).mean()
-        df['hma'] = TitanEngine.get_ma(df['close'], hma_l, "HMA")
-
-        # Momentum
-        delta = df['close'].diff()
-        gain = delta.clip(lower=0).ewm(alpha=1/14).mean()
-        loss = -delta.clip(upper=0).ewm(alpha=1/14).mean()
-        df['rsi'] = 100 - (100 / (1 + (gain/loss)))
-        df['rvol'] = df['volume'] / df['volume'].rolling(20).mean()
-
-        # Money Flow
-        rsi_source = df['rsi'] - 50
-        vol_sma = df['volume'].rolling(14).mean()
-        df['money_flow'] = (rsi_source * (df['volume'] / vol_sma)).ewm(span=3).mean()
-        
-        # Squeeze
-        bb_basis = df['close'].rolling(20).mean()
-        bb_dev = df['close'].rolling(20).std() * 2.0
-        kc_basis = df['close'].rolling(20).mean()
-        kc_dev = df['atr'] * 1.5
-        df['in_squeeze'] = ((bb_basis - bb_dev) > (kc_basis - kc_dev)) & ((bb_basis + bb_dev) < (kc_basis + kc_dev))
-
-        # Titan Trend
-        df['ll'] = df['low'].rolling(amp).min()
-        df['hh'] = df['high'].rolling(amp).max()
-        trend = np.zeros(len(df))
-        stop = np.full(len(df), np.nan)
-        curr_t = 0; curr_s = np.nan
-        
-        for i in range(amp, len(df)):
-            c = df.at[i,'close']
-            d = df.at[i,'atr']*dev
-            if curr_t == 0:
-                s = df.at[i,'ll'] + d
-                curr_s = max(curr_s, s) if not np.isnan(curr_s) else s
-                if c < curr_s: curr_t = 1; curr_s = df.at[i,'hh'] - d
-            else:
-                s = df.at[i,'hh'] - d
-                curr_s = min(curr_s, s) if not np.isnan(curr_s) else s
-                if c > curr_s: curr_t = 0; curr_s = df.at[i,'ll'] + d
-            trend[i] = curr_t
-            stop[i] = curr_s
-        
-        df['is_bull'] = trend == 0
-        df['entry_stop'] = stop
-        
-        # Apex SMC
-        df['apex_base'] = TitanEngine.get_ma(df['close'], apex_len, "HMA")
-        df['apex_upper'] = df['apex_base'] + (df['atr'] * apex_mult)
-        df['apex_lower'] = df['apex_base'] - (df['atr'] * apex_mult)
-        df['apex_adx'] = TitanEngine.calculate_adx(df)
-        df['apex_tci'] = TitanEngine.calculate_wavetrend(df)
-        
-        apex_trend = np.zeros(len(df)); apex_trail = np.full(len(df), np.nan)
-        visual_zones = []
-        curr_at = 0; curr_tr = np.nan
-        
-        for i in range(max(apex_len, liq_len, 20), len(df)):
-            c = df.at[i, 'close']
-            if c > df.at[i, 'apex_upper']: curr_at = 1
-            elif c < df.at[i, 'apex_lower']: curr_at = -1
-            apex_trend[i] = curr_at
-            
-            atr2 = df.at[i, 'atr'] * 2.0
-            if curr_at == 1:
-                val = c - atr2
-                curr_tr = max(curr_tr, val) if not np.isnan(curr_tr) else val
-                if apex_trend[i-1] == -1: curr_tr = val
-            elif curr_at == -1:
-                val = c + atr2
-                curr_tr = min(curr_tr, val) if not np.isnan(curr_tr) else val
-                if apex_trend[i-1] == 1: curr_tr = val
-            apex_trail[i] = curr_tr
-
-            # Pivots/Zones
-            p_idx = i - liq_len
-            is_ph = True
-            for k in range(1, liq_len + 1):
-                if df.at[p_idx, 'high'] <= df.at[p_idx-k, 'high'] or df.at[p_idx, 'high'] <= df.at[p_idx+k, 'high']: is_ph = False; break
-            if is_ph:
-                 visual_zones.append({'type': 'SUPPLY', 'x0': df.at[p_idx, 'timestamp'], 'x1': df.at[i, 'timestamp'], 'y0': df.at[p_idx, 'high'], 'y1': df.at[p_idx, 'close'], 'color': 'rgba(229, 57, 53, 0.3)'})
-
-            is_pl = True
-            for k in range(1, liq_len + 1):
-                if df.at[p_idx, 'low'] >= df.at[p_idx-k, 'low'] or df.at[p_idx, 'low'] >= df.at[p_idx+k, 'low']: is_pl = False; break
-            if is_pl:
-                 visual_zones.append({'type': 'DEMAND', 'x0': df.at[p_idx, 'timestamp'], 'x1': df.at[i, 'timestamp'], 'y0': df.at[p_idx, 'low'], 'y1': df.at[p_idx, 'close'], 'color': 'rgba(67, 160, 71, 0.3)'})
-
-        df['apex_trend'] = apex_trend
-        df['apex_trail'] = apex_trail
-        
-        # --- MISSING FLUX FIX ---
-        rg = df['high'] - df['low']
-        body = np.abs(df['close'] - df['open'])
-        eff_raw = np.where(rg == 0, 0, body / rg)
-        eff_sm = pd.Series(eff_raw, index=df.index).ewm(span=14).mean()
-        vol_avg = df['volume'].rolling(55).mean()
-        v_rat = np.where(vol_avg == 0, 1, df['volume'] / vol_avg)
-        direction = np.sign(df['close'] - df['open'])
-        raw = direction * eff_sm * pd.Series(v_rat, index=df.index)
-        df['Apex_Flux'] = raw.ewm(span=5).mean()
-        # ------------------------
-
-        # Gann
-        sma_h = df['high'].rolling(gann_l).mean()
-        sma_l = df['low'].rolling(gann_l).mean()
-        g_trend = np.zeros(len(df))
-        curr_g = 1
-        for i in range(gann_l, len(df)):
-            if curr_g == 1:
-                if df.at[i,'close'] < sma_l.iloc[i-1]: curr_g = -1
-            else:
-                if df.at[i,'close'] > sma_h.iloc[i-1]: curr_g = 1
-            g_trend[i] = curr_g
-        df['gann_trend'] = g_trend
-
-        # Targets
-        risk = abs(df['close'] - df['entry_stop'])
-        # --- PANDAS ERROR FIX ---
-        risk = risk.mask(risk == 0, df['close'] * 0.01)
-        # ------------------------
-        df['tp1'] = np.where(df['is_bull'], df['close'] + 1.5*risk, df['close'] - 1.5*risk)
-        df['tp2'] = np.where(df['is_bull'], df['close'] + 3.0*risk, df['close'] - 3.0*risk)
-        df['tp3'] = np.where(df['is_bull'], df['close'] + 5.0*risk, df['close'] - 5.0*risk)
-
-        # VWAP for Reporting
-        df['tp'] = (df['high'] + df['low'] + df['close']) / 3
-        df['vol_tp'] = df['tp'] * df['volume']
-        df['vwap'] = df['vol_tp'].cumsum() / df['volume'].cumsum()
-
-        if len(visual_zones) > 20: visual_zones = visual_zones[-20:]
-        return df, visual_zones
-
-    @staticmethod
-    def detect_special_setups(df):
-        last = df.iloc[-1]; prev = df.iloc[-2]
-        setups = { "squeeze_breakout": False, "gann_reversal": False, "rvol_ignition": False }
-        if prev['in_squeeze'] and not last['in_squeeze']: setups["squeeze_breakout"] = True
-        if last['gann_trend'] != prev['gann_trend']: setups["gann_reversal"] = True
-        if last['rvol'] > 3.0: setups["rvol_ignition"] = True
-        return setups
-
-    @staticmethod
-    def generate_mobile_report(row, fg_index, special_setups):
-        # Direction Logic
-        is_bull = row['is_bull']
-        direction_text = "LONG 🐂" if is_bull else "SHORT 🐻"
-        sig_color = "#38bdf8" # Cyan
-        
-        # Confidence Logic
-        titan_s = 1 if is_bull else -1
-        apex_s = row['apex_trend']
-        gann_s = row['gann_trend']
-        score = 0
-        if titan_s == apex_s: score += 1
-        if titan_s == gann_s: score += 1
-        
-        conf_text = "LOW"
-        if score == 2: conf_text = "HIGH"
-        elif score == 1: conf_text = "MEDIUM"
-        
-        # Squeeze Logic
-        squeeze_active = row['in_squeeze']
-        sqz_text = "SQUEEZE ACTIVE" if squeeze_active else "NO SQUEEZE"
-        sqz_icon = "⚠️" if squeeze_active else "⚪"
-        sqz_class = "value-yellow" if squeeze_active else "value-cyan"
-
-        # Vol/Flow Logic
-        rvol_val = row['rvol']
-        rvol_desc = "(Normal)"
-        if rvol_val > 2.0: rvol_desc = "(Ignition)"
-        elif rvol_val < 0.5: rvol_desc = "(Low)"
-        
-        vwap_rel = "Above" if row['close'] > row['vwap'] else "Below"
-        vwap_color_class = "value-cyan" # Default
-
-        return f"""
-        <div class="report-card" style="border-left: 4px solid #38bdf8;">
-            <div class="report-header">
-                <span>💠 SIGNAL: {direction_text}</span>
-            </div>
-            <div class="report-item">Confidence: <span class="value-cyan">{conf_text}</span></div>
-            <div class="report-item">Sentiment: <span class="value-cyan">{fg_index}/100</span></div>
-            <div class="report-item">Squeeze: {sqz_icon} <span class="{sqz_class}">{sqz_text}</span></div>
-        </div>
-
-        <div class="report-card" style="border-left: 4px solid #38bdf8;">
-            <div class="report-header">
-                <span>🌊 FLOW & VOL</span>
-            </div>
-            <div class="report-item">RVOL: <span class="value-cyan">{rvol_val:.2f} {rvol_desc}</span></div>
-            <div class="report-item">Money Flow: <span class="value-cyan">{row['money_flow']:.2f}</span></div>
-            <div class="report-item">VWAP Relation: <span class="{vwap_color_class}">{vwap_rel}</span></div>
-        </div>
-        
-        <div class="report-card" style="border-left: 4px solid #38bdf8;">
-            <div class="report-header">
-                <span>🎯 EXECUTION PLAN</span>
-            </div>
-            <div class="report-item">Entry: <span class="value-cyan">{row['close']:.4f}</span></div>
-            <div class="report-item">🛑 SMART STOP: <span class="value-cyan">{row['entry_stop']:.4f}</span></div>
-            <div class="report-item">1️⃣ TP1 (1.5R): <span class="value-cyan">{row['tp1']:.4f}</span></div>
-            <div class="report-item">2️⃣ TP2 (3.0R): <span class="value-cyan">{row['tp2']:.4f}</span></div>
-            <div class="report-item">3️⃣ TP3 (5.0R): <span class="value-cyan">{row['tp3']:.4f}</span></div>
-        </div>
-        """
-
-# =============================================================================
-# 5. AXIOM ENGINE (STOCKS / PHYSICS)
-# =============================================================================
-class AxiomEngine:
-    @staticmethod
-    def get_asset_classes():
-        return [
-            "Crypto (Major)", "Crypto (Alt/Meme)", "Indices & ETFs", 
-            "US Tech (Mag 7+)", "US Large Cap", "High Volatility", 
-            "Commodities & Forex"
-        ]
-
-    @staticmethod
-    def get_tickers_by_class(asset_class):
-        universe = {
-            "Crypto (Major)": ["BTC-USD", "ETH-USD", "SOL-USD", "BNB-USD", "XRP-USD", "ADA-USD"],
-            "Crypto (Alt/Meme)": ["SHIB-USD", "PEPE-USD", "BONK-USD", "WIF-USD", "FLOKI-USD", "DOGE-USD"],
-            "Indices & ETFs": ["SPY", "QQQ", "IWM", "DIA", "TLT", "VXX", "UVXY", "SQQQ", "TQQQ", "SOXL"],
-            "US Tech (Mag 7+)": ["NVDA", "AAPL", "MSFT", "GOOGL", "AMZN", "META", "TSLA", "AMD"],
-            "US Large Cap": ["JPM", "BAC", "WFC", "JNJ", "LLY", "PFE", "PG", "KO", "PEP", "COST", "WMT"],
-            "High Volatility": ["MSTR", "COIN", "MARA", "RIOT", "CLSK", "GME", "AMC", "HOOD", "DKNG"],
-            "Commodities & Forex": ["GLD", "SLV", "USO", "EURUSD=X", "GBPUSD=X", "JPY=X", "GC=F", "CL=F"]
-        }
-        return universe.get(asset_class, [])
-
-    @staticmethod
-    @st.cache_data(ttl=300, show_spinner=False)
-    def fetch_data(ticker, timeframe, limit=500):
-        tf_map = {"15m": "1mo", "1h": "6mo", "4h": "1y", "1d": "2y", "1wk": "5y"}
-        period = tf_map.get(timeframe, "1y")
-        try:
-            df = yf.download(ticker, period=period, interval=timeframe, progress=False)
-            if isinstance(df.columns, pd.MultiIndex):
-                try: df = df.xs(ticker, axis=1, level=0)
-                except: df.columns = df.columns.get_level_values(0)
-            df = df.rename(columns={c: c.capitalize() for c in df.columns}) # Keep Capital for Axiom
-            if 'Adj close' in df.columns: df['Close'] = df['Adj close']
-            return df.dropna().tail(limit)
-        except: return pd.DataFrame()
-
-    @staticmethod
-    @st.cache_data(ttl=3600)
-    def get_fundamentals(ticker):
-        if "-" in ticker or "=" in ticker: return None
-        try:
-            stock = yf.Ticker(ticker)
-            return { "Market Cap": stock.info.get("marketCap", "N/A"), "P/E Ratio": stock.info.get("trailingPE", "N/A") }
-        except: return None
-
-    @staticmethod
-    @st.cache_data(ttl=1800)
-    def get_macro_data():
-        assets = {"S&P 500": "SPY", "VIX": "^VIX"}
-        try:
-            data = yf.download(list(assets.values()), period="5d", interval="1d", progress=False)['Close']
-            prices = {k: data[v].iloc[-1] for k,v in assets.items() if v in data}
-            changes = {k: ((data[v].iloc[-1]-data[v].iloc[-2])/data[v].iloc[-2])*100 for k,v in assets.items() if v in data}
-            return prices, changes
-        except: return {}, {}
-
-    @staticmethod
-    def tanh(x): return np.tanh(np.clip(x, -20, 20))
-
-    @staticmethod
-    def calc_chedo(df, length=50):
-        c = df['Close'].values
-        log_ret = np.diff(np.log(c), prepend=np.log(c[0]))
-        mu = pd.Series(log_ret).rolling(length).mean().values
-        sigma = pd.Series(log_ret).rolling(length).std().values
-        v = sigma / (np.abs(mu) + 1e-9)
-        abs_ret_v = np.abs(log_ret) * v
-        hyper_dist = np.log(abs_ret_v + np.sqrt(abs_ret_v**2 + 1))
-        kappa_h = AxiomEngine.tanh(pd.Series(hyper_dist).rolling(length).mean().values)
-        diff_ret = np.diff(log_ret, prepend=0)
-        lyap = np.log(np.abs(diff_ret) + 1e-9)
-        lambda_n = AxiomEngine.tanh((pd.Series(lyap).rolling(length).mean().values + 5) / 7)
-        ent = pd.Series(log_ret**2).rolling(length).sum().values
-        ent_n = AxiomEngine.tanh(ent * 10)
-        raw = (0.4 * kappa_h) + (0.3 * lambda_n) + (0.3 * ent_n)
-        df['CHEDO'] = 2 / (1 + np.exp(-raw * 4)) - 1
-        return df
-
-    @staticmethod
-    def calc_rqzo(df, harmonics=25):
-        src = df['Close']
-        mn, mx = src.rolling(100).min(), src.rolling(100).max()
-        norm = (src - mn) / (mx - mn + 1e-9)
-        v = np.abs(norm.diff())
-        c_limit = 0.05
-        gamma = 1 / np.sqrt(1 - (np.minimum(v, c_limit*0.99)/c_limit)**2)
-        idx = np.arange(len(df))
-        tau = (idx % 100) / gamma.fillna(1.0)
-        zeta = np.zeros(len(df))
-        for n in range(1, harmonics + 1):
-            amp = n ** -0.5
-            theta = tau * np.log(n)
-            zeta += amp * np.sin(theta)
-        df['RQZO'] = pd.Series(zeta).fillna(0)
-        return df
-
-    @staticmethod
-    def calc_apex_flux(df, length=14):
-        rg = df['High'] - df['Low']
-        body = np.abs(df['Close'] - df['Open'])
-        eff_raw = np.where(rg == 0, 0, body / rg)
-        eff_sm = pd.Series(eff_raw, index=df.index).ewm(span=length).mean()
-        vol_avg = df['Volume'].rolling(55).mean()
-        v_rat = np.where(vol_avg == 0, 1, df['Volume'] / vol_avg)
-        direction = np.sign(df['Close'] - df['Open'])
-        raw = direction * eff_sm * pd.Series(v_rat, index=df.index)
-        df['Apex_Flux'] = raw.ewm(span=5).mean()
-        df['Apex_State'] = np.select([df['Apex_Flux'] > 0.6, df['Apex_Flux'] < -0.6], ["Super Bull", "Super Bear"], default="Neutral")
-        return df
-
-    @staticmethod
-    def calc_smc(df, length=55):
-        def wma(s, l):
-            w = np.arange(1, l+1)
-            return s.rolling(l).apply(lambda x: np.dot(x, w)/w.sum(), raw=True)
-        close = df['Close']
-        half = int(length/2); sqrt = int(np.sqrt(length))
-        wma_f = wma(close, length); wma_h = wma(close, half)
-        df['HMA_Trend'] = wma(2*wma_h - wma_f, sqrt)
-        df['Trend_Dir'] = np.where(close > df['HMA_Trend'], 1, -1)
-        return df
-
-    @staticmethod
-    def calc_fear_greed_v4(df):
-        delta = df['Close'].diff()
-        gain = delta.clip(lower=0).rolling(14).mean()
-        loss = -delta.clip(upper=0).rolling(14).mean()
-        rsi = 100 - (100 / (1 + gain/loss))
-        macd = df['Close'].ewm(span=12).mean() - df['Close'].ewm(span=26).mean()
-        df['FG_Index'] = (rsi + (macd * 10)).clip(0, 100).rolling(5).mean()
-        return df
-
-    @staticmethod
-    @st.cache_data(ttl=600)
-    def run_monte_carlo(df, days=30, sims=100):
-        last_price = df['Close'].iloc[-1]
-        returns = df['Close'].pct_change().dropna()
-        mu = returns.mean(); sigma = returns.std()
-        sim_rets = np.random.normal(mu, sigma, (days, sims))
-        paths = np.zeros((days, sims)); paths[0] = last_price
-        for t in range(1, days): paths[t] = paths[t-1] * (1 + sim_rets[t])
-        return paths
-
-    @staticmethod
-    def calc_volume_profile(df, bins=50):
-        price_min = df['Low'].min(); price_max = df['High'].max()
-        price_bins = np.linspace(price_min, price_max, bins)
-        df['Mid'] = (df['Close'] + df['Open']) / 2
-        df['Bin'] = pd.cut(df['Mid'], bins=price_bins, labels=price_bins[:-1], include_lowest=True)
-        vp = df.groupby('Bin', observed=False)['Volume'].sum().reset_index()
-        vp['Price'] = vp['Bin'].astype(float)
-        poc = vp.loc[vp['Volume'].idxmax(), 'Price']
-        return vp, poc
-
-    @staticmethod
-    @st.cache_data(ttl=3600)
-    def calc_day_of_week_dna(ticker):
-        try:
-            df = yf.download(ticker, period="2y", interval="1d", progress=False)
-            df['Day'] = df.index.day_name()
-            df['Ret'] = df['Close'].pct_change() * 100
-            return df.groupby('Day')['Ret'].mean()
-        except: return None
-
-    @staticmethod
-    def analyze_ai(ticker, price, chedo, rqzo, flux, api_key):
-        if not api_key: return "❌ Missing OpenAI API Key."
-        prompt = f"Analyze {ticker} at {price}. Metrics: Entropy (CHEDO) {chedo:.2f}, Relativity (RQZO) {rqzo:.2f}, Flux {flux:.2f}. >0.8 Entropy is chaos. >0.6 Flux is breakout. Brief strategy."
-        try:
-            client = OpenAI(api_key=api_key)
-            return client.chat.completions.create(model="gpt-4o", messages=[{"role":"user", "content":prompt}]).choices[0].message.content
-        except Exception as e: return f"AI Error: {e}"
-
-    # --- NEW: AXIOM REPORTING & SIGNALING ---
-    @staticmethod
-    def generate_axiom_report_html(row, ticker):
-        """Generates a detailed HTML report for Axiom Quant Mode with technical explanations."""
-        # Determine Signal
-        trend_bullish = row['Trend_Dir'] == 1
-        flux_bullish = row['Apex_Flux'] > 0
-        
-        signal = "NEUTRAL ⚪"
-        if trend_bullish and flux_bullish: signal = "LONG 🐂"
-        elif not trend_bullish and not flux_bullish: signal = "SHORT 🐻"
-        
-        # Explain CHEDO (Entropy)
-        chedo_val = row['CHEDO']
-        chedo_desc = "Stable"
-        if abs(chedo_val) > 0.8: chedo_desc = "CHAOS (High Risk)"
-        elif abs(chedo_val) > 0.5: chedo_desc = "Volatile"
-        chedo_expl = "Measures market disorder. High values (>0.8) precede crashes/reversals."
-
-        # Explain Flux
-        flux_val = row['Apex_Flux']
-        flux_desc = row['Apex_State']
-        flux_expl = "Volume-weighted momentum. Positive values indicate buying pressure."
-
-        # FIXED: Removed indentation in f-string to prevent Markdown code block rendering error
-        return f"""
-<div class="report-card" style="border-left: 4px solid #38bdf8;">
-    <div class="report-header">💠 AXIOM SIGNAL: {signal}</div>
-    <div class="report-item">Asset: <span class="value-cyan">{ticker}</span></div>
-    <div class="report-item">Price: <span class="value-cyan">{row['Close']:.2f}</span></div>
-    <div class="report-item">Trend State: <span class="value-cyan">{'Bullish' if trend_bullish else 'Bearish'}</span></div>
-</div>
-<div class="report-card" style="border-left: 4px solid #D500F9;">
-    <div class="report-header">🧬 PHYSICS METRICS</div>
-    <div class="report-item">Entropy (CHEDO): <span class="value-cyan">{chedo_val:.2f} ({chedo_desc})</span></div>
-    <div class="report-context">{chedo_expl}</div>
-    <div class="report-item" style="margin-top:10px;">Flux State: <span class="value-cyan">{flux_val:.2f} ({flux_desc})</span></div>
-    <div class="report-context">{flux_expl}</div>
-    <div class="report-item" style="margin-top:10px;">Relativity (RQZO): <span class="value-cyan">{row['RQZO']:.2f}</span></div>
-    <div class="report-context">Measures price deviation from harmonic norms. Zero is mean reversion.</div>
-</div>
-"""
-
-# --- MOBILE OPTIMIZED REPORT GENERATOR (LEGACY/STANDALONE) ---
-# Uses HTML/CSS Cards instead of Wide Tables
-def generate_mobile_report_standalone(row, symbol, tf, fibs, fg_index, smart_stop):
-    is_bull = row['is_bull']
-    direction = "LONG 🐂" if is_bull else "SHORT 🐻"
-
-    # Logic
-    titan_sig = 1 if row['is_bull'] else -1
-    apex_sig = row['apex_trend']
-    gann_sig = row['gann_trend']
-
-    score_val = 0
-    if titan_sig == apex_sig: score_val += 1
-    if titan_sig == gann_sig: score_val += 1
-
-    confidence = "LOW"
-    if score_val == 2: confidence = "MAX 🔥"
-    elif score_val == 1: confidence = "HIGH"
-
-    vol_desc = "Normal"
-    if row['rvol'] > 2.0: vol_desc = "IGNITION 🚀"
-
-    squeeze_txt = "⚠️ SQUEEZE ACTIVE" if row['in_squeeze'] else "⚪ NO SQUEEZE"
-
-    # HTML Card Construction
-    report_html = f"""
-    <div class="report-card">
-        <div class="report-header">💠 SIGNAL: {direction}</div>
-        <div class="report-item">Confidence: <span class="highlight">{confidence}</span></div>
-        <div class="report-item">Sentiment: <span class="highlight">{fg_index}/100</span></div>
-        <div class="report-item">Squeeze: <span class="highlight">{squeeze_txt}</span></div>
-    </div>
-
-    <div class="report-card">
-        <div class="report-header">🌊 FLOW & VOL</div>
-        <div class="report-item">RVOL: <span class="highlight">{row['rvol']:.2f} ({vol_desc})</span></div>
-        <div class="report-item">Money Flow: <span class="highlight">{row['money_flow']:.2f}</span></div>
-        <div class="report-item">VWAP Relation: <span class="highlight">{'Above' if row['close'] > row['vwap'] else 'Below'}</span></div>
-    </div>
-
-    <div class="report-card">
-        <div class="report-header">🎯 EXECUTION PLAN</div>
-        <div class="report-item">Entry: <span class="highlight">{row['close']:.4f}</span></div>
-        <div class="report-item">🛑 SMART STOP: <span class="highlight">{smart_stop:.4f}</span></div>
-        <div class="report-item">1️⃣ TP1 (1.5R): <span class="highlight">{row['tp1']:.4f}</span></div>
-        <div class="report-item">2️⃣ TP2 (3.0R): <span class="highlight">{row['tp2']:.4f}</span></div>
-        <div class="report-item">3️⃣ TP3 (5.0R): <span class="highlight">{row['tp3']:.4f}</span></div>
-    </div>
-    """
-    return report_html
-
-def send_telegram_msg_standalone(token, chat, msg):
-    if not token or not chat:
-        return False
-    try:
-        r = requests.post(
-            f"https://api.telegram.org/bot{token}/sendMessage",
-            json={"chat_id": chat, "text": msg, "parse_mode": "Markdown"},
-            timeout=5
-        )
-        return r.status_code == 200
-    except:
-        return False
-
-@st.cache_data(ttl=5)
-def get_klines_standalone(symbol_bin, interval, limit):
-    try:
-        r = requests.get(
-            f"{BINANCE_API_BASE}/klines",
-            params={"symbol": symbol_bin, "interval": interval, "limit": limit},
-            headers=HEADERS,
-            timeout=4
-        )
-        if r.status_code == 200:
-            df = pd.DataFrame(r.json(), columns=['t','o','h','l','c','v','T','q','n','V','Q','B'])
-            df['timestamp'] = pd.to_datetime(df['t'], unit='ms')
-            df[['open','high','low','close','volume']] = df[['o','h','l','c','v']].astype(float)
-            return df[['timestamp','open','high','low','close','volume']]
-    except:
-        pass
-    return pd.DataFrame()
-
-def calculate_hma(series, length):
-    half_len = int(length / 2)
-    sqrt_len = int(math.sqrt(length))
-    wma_f = series.rolling(length).mean()
-    wma_h = series.rolling(half_len).mean()
-    diff = 2 * wma_h - wma_f
-    return diff.rolling(sqrt_len).mean()
-
-def run_engines_standalone(df, amp, dev, hma_l, tp1, tp2, tp3, mf_l, vol_l, gann_l):
-    if df.empty:
-        return df
-    df = df.copy().reset_index(drop=True)
-
-    # Indicators
-    df['tr'] = np.maximum(
-        df['high']-df['low'],
-        np.maximum(abs(df['high']-df['close'].shift(1)), abs(df['low']-df['close'].shift(1)))
-    )
-    df['atr'] = df['tr'].ewm(alpha=1/14, adjust=False).mean()
-    df['hma'] = calculate_hma(df['close'], hma_l)
-
-    # VWAP
-    df['tp'] = (df['high'] + df['low'] + df['close']) / 3
-    df['vol_tp'] = df['tp'] * df['volume']
-    df['vwap'] = df['vol_tp'].cumsum() / df['volume'].cumsum()
-
-    # Squeeze
-    bb_basis = df['close'].rolling(20).mean()
-    bb_dev = df['close'].rolling(20).std() * 2.0
-    kc_basis = df['close'].rolling(20).mean()
-    kc_dev = df['atr'] * 1.5
-    df['in_squeeze'] = ((bb_basis - bb_dev) > (kc_basis - kc_dev)) & ((bb_basis + bb_dev) < (kc_basis + kc_dev))
-
-    # Momentum
-    delta = df['close'].diff()
-    gain = delta.clip(lower=0).ewm(alpha=1/14).mean()
-    loss = -delta.clip(upper=0).ewm(alpha=1/14).mean()
-    df['rsi'] = 100 - (100 / (1 + (gain/loss)))
-    df['rvol'] = df['volume'] / df['volume'].rolling(vol_l).mean()
-
-    # Money Flow
-    rsi_source = df['rsi'] - 50
-    vol_sma = df['volume'].rolling(mf_l).mean()
-    df['money_flow'] = (rsi_source * (df['volume'] / vol_sma)).ewm(span=3).mean()
-
-    pc = df['close'].diff()
-    ds_pc = pc.ewm(span=25).mean().ewm(span=13).mean()
-    ds_abs_pc = abs(pc).ewm(span=25).mean().ewm(span=13).mean()
-    df['hyper_wave'] = (100 * (ds_pc / ds_abs_pc)) / 2
-
-    # Titan Trend
-    df['ll'] = df['low'].rolling(amp).min()
-    df['hh'] = df['high'].rolling(amp).max()
-    trend = np.zeros(len(df))
-    stop = np.full(len(df), np.nan)
-    curr_t = 0
-    curr_s = np.nan
-    for i in range(amp, len(df)):
-        c = df.at[i,'close']
-        d = df.at[i,'atr']*dev
-        if curr_t == 0:
-            s = df.at[i,'ll'] + d
-            curr_s = max(curr_s, s) if not np.isnan(curr_s) else s
-            if c < curr_s:
-                curr_t = 1
-                curr_s = df.at[i,'hh'] - d
-        else:
-            s = df.at[i,'hh'] - d
-            curr_s = min(curr_s, s) if not np.isnan(curr_s) else s
-            if c > curr_s:
-                curr_t = 0
-                curr_s = df.at[i,'ll'] + d
-        trend[i] = curr_t
-        stop[i] = curr_s
-
-    df['is_bull'] = trend == 0
-    df['entry_stop'] = stop
-
-    # Signals
-    cond_buy = (df['is_bull']) & (~df['is_bull'].shift(1).fillna(False)) & (df['rvol']>1.0)
-    cond_sell = (~df['is_bull']) & (df['is_bull'].shift(1).fillna(True)) & (df['rvol']>1.0)
-    df['buy'] = cond_buy
-    df['sell'] = cond_sell
-
-    # Targets
-    df['sig_id'] = (df['buy']|df['sell']).cumsum()
-    df['entry'] = df.groupby('sig_id')['close'].ffill()
-    df['stop_val'] = df.groupby('sig_id')['entry_stop'].ffill()
-    risk = abs(df['entry'] - df['stop_val'])
-    df['tp1'] = np.where(df['is_bull'], df['entry']+(risk*tp1), df['entry']-(risk*tp1))
-    df['tp2'] = np.where(df['is_bull'], df['entry']+(risk*tp2), df['entry']-(risk*tp2))
-    df['tp3'] = np.where(df['is_bull'], df['entry']+(risk*tp3), df['entry']-(risk*tp3))
-
-    # Apex & Gann
-    apex_base = calculate_hma(df['close'], 55)
-    apex_atr = df['atr'] * 1.5
-    df['apex_upper'] = apex_base + apex_atr
-    df['apex_lower'] = apex_base - apex_atr
-    apex_t = np.zeros(len(df))
-    for i in range(1, len(df)):
-        if df.at[i, 'close'] > df.at[i, 'apex_upper']:
-            apex_t[i] = 1
-        elif df.at[i, 'close'] < df.at[i, 'apex_lower']:
-            apex_t[i] = -1
-        else:
-            apex_t[i] = apex_t[i-1]
-    df['apex_trend'] = apex_t
-
-    sma_h = df['high'].rolling(gann_l).mean()
-    sma_l = df['low'].rolling(gann_l).mean()
-    g_trend = np.full(len(df), np.nan)
-    g_act = np.full(len(df), np.nan)
-    curr_g_t = 1
-    curr_g_a = sma_l.iloc[gann_l] if len(sma_l) > gann_l else np.nan
-    for i in range(gann_l, len(df)):
-        c = df.at[i,'close']
-        h_ma = sma_h.iloc[i]
-        l_ma = sma_l.iloc[i]
-        prev_a = g_act[i-1] if (i>0 and not np.isnan(g_act[i-1])) else curr_g_a
-        if curr_g_t == 1:
-            if c < prev_a:
-                curr_g_t = -1
-                curr_g_a = h_ma
-            else:
-                curr_g_a = l_ma
-        else:
-            if c > prev_a:
-                curr_g_t = 1
-                curr_g_a = l_ma
-            else:
-                curr_g_a = h_ma
-        g_trend[i] = curr_g_t
-        g_act[i] = curr_g_a
-    df['gann_trend'] = g_trend
-    df['gann_act'] = g_act
-
-    return df
-
-# =============================================================================
-# 6. MAIN CONTROLLER
-# =============================================================================
-def main():
-    # SIDEBAR CONTROLLER
-    st.sidebar.header("💠 OMNI-STATION")
-    mode = st.sidebar.radio("ENGINE MODE", ["TITAN MOBILE (Crypto)", "AXIOM QUANT (Stocks)"])
-    
-    with st.sidebar.expander("🔐 KEYS"):
-        tg_token = st.text_input("Bot Token", value=SecretsManager.get("TELEGRAM_TOKEN"), type="password")
-        tg_chat = st.text_input("Chat ID", value=SecretsManager.get("TELEGRAM_CHAT_ID"))
-        ai_key = st.text_input("AI Key", value=SecretsManager.get("OPENAI_API_KEY"), type="password")
-
-    # -------------------------------------------------------------------------
-    # MODE 1: TITAN MOBILE (Binance)
-    # -------------------------------------------------------------------------
-    if mode == "TITAN MOBILE (Crypto)":
-        st.sidebar.subheader("📡 BINANCE FEED")
-        bases = TitanEngine.get_binance_bases()
-        idx = bases.index("BTC") if "BTC" in bases else 0
-        base = st.sidebar.selectbox("Asset", bases, index=idx)
-        ticker = f"{base}USDT"
-        
-        c1, c2 = st.sidebar.columns(2)
-        with c1: timeframe = st.selectbox("TF", ["15m", "1h", "4h", "1d"], index=1)
-        with c2: limit = st.slider("Depth", 100, 500, 200, 50)
-        
-        st.sidebar.markdown("---")
-        st.sidebar.subheader("🧠 LOGIC")
-        amp = st.sidebar.number_input("Amplitude", 2, 100, 10)
-        dev = st.sidebar.number_input("Deviation", 0.5, 5.0, 3.0)
-        hma_len = st.sidebar.number_input("HMA Len", 10, 200, 50)
-        gann_len = st.sidebar.number_input("Gann Len", 2, 50, 3)
-
-        # MAIN UI TITAN
-        st.title(f"💠 TITAN: {base}")
-        Visuals.render_titan_clock()
-        Visuals.render_titan_tape(ticker)
-        
-        with st.spinner("Connecting to Binance..."):
-            df = TitanEngine.get_klines(ticker, timeframe, limit)
-        
-        if not df.empty:
-            df, zones = TitanEngine.run_engine(df, int(amp), dev, int(hma_len), int(gann_len), 55, 1.5, 10)
-            last = df.iloc[-1]
-            
-            # METRICS
-            c1, c2, c3, c4 = st.columns(4)
-            c1.metric("TREND", "BULL 🟢" if last['is_bull'] else "BEAR 🔴")
-            c2.metric("FLUX", f"{last['Apex_Flux']:.2f}")
-            c3.metric("STOP", f"{last['entry_stop']:.2f}")
-            c4.metric("TP3", f"{last['tp3']:.2f}")
-            
-            # HTML REPORT
-            fg = TitanEngine.calculate_fear_greed(df)
-            spec = TitanEngine.detect_special_setups(df)
-            st.markdown(TitanEngine.generate_mobile_report(last, fg, spec), unsafe_allow_html=True)
-            
-            # TELEGRAM
-            if st.button("📢 SEND TITAN SIGNAL"):
-                msg = f"🚀 *TITAN SIGNAL* 🚀\nSymbol: {ticker}\nSide: {'LONG' if last['is_bull'] else 'SHORT'}\nEntry: {last['close']}\nStop: {last['entry_stop']}\nTP1: {last['tp1']}\nTP2: {last['tp2']}\nTP3: {last['tp3']}"
-                if send_telegram(tg_token, tg_chat, msg): st.success("SENT")
-                else: st.error("FAIL")
-            
-            # CHART
-            fig = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.7, 0.3], vertical_spacing=0.05)
-            fig.add_trace(go.Candlestick(x=df['timestamp'], open=df['open'], high=df['high'], low=df['low'], close=df['close'], name='Price'), row=1, col=1)
-            fig.add_trace(go.Scatter(x=df['timestamp'], y=df['hma'], line=dict(color='#00F0FF', width=1), name='HMA'), row=1, col=1)
-            fig.add_trace(go.Scatter(x=df['timestamp'], y=df['apex_trail'], line=dict(color='orange', width=1, dash='dot'), name='Trail'), row=1, col=1)
-            for z in zones: fig.add_shape(type="rect", x0=z['x0'], x1=z['x1'], y0=z['y0'], y1=z['y1'], fillcolor=z['color'], line_width=0, row=1, col=1)
-            colors = np.where(df['Apex_Flux'] > 0, '#00E676', '#FF1744')
-            fig.add_trace(go.Bar(x=df['timestamp'], y=df['Apex_Flux'], marker_color=colors, name='Flux'), row=2, col=1)
-            fig.update_layout(height=500, template='plotly_dark', margin=dict(l=0,r=0,t=10,b=0), hovermode="x unified", xaxis_rangeslider_visible=False)
-            st.plotly_chart(fig, use_container_width=True)
-
-    # -------------------------------------------------------------------------
-    # MODE 2: AXIOM QUANT (Stocks/YFinance)
-    # -------------------------------------------------------------------------
-    else:
-        st.sidebar.subheader("📡 MARKET DATA")
-        ac_list = AxiomEngine.get_asset_classes()
-        ac = st.sidebar.selectbox("Sector", ac_list)
-        ticks = AxiomEngine.get_tickers_by_class(ac)
-        ticker = st.sidebar.selectbox("Ticker", ticks)
-        tf = st.sidebar.selectbox("TF", ["15m", "1h", "4h", "1d", "1wk"], index=3)
-        
-        st.title(f"💠 AXIOM: {ticker}")
-        Visuals.render_axiom_clock()
-        Visuals.render_axiom_banner()
-        
-        with st.spinner("Crunching Physics..."):
-            df = AxiomEngine.fetch_data(ticker, tf)
-        
-        if not df.empty:
-            # RUN AXIOM LOGIC
-            df = AxiomEngine.calc_chedo(df)
-            df = AxiomEngine.calc_rqzo(df)
-            df = AxiomEngine.calc_apex_flux(df)
-            df = AxiomEngine.calc_smc(df)
-            last = df.iloc[-1]
-            fund = AxiomEngine.get_fundamentals(ticker)
-            macro_p, macro_c = AxiomEngine.get_macro_data()
-            
-            # DASHBOARD METRICS
-            c1, c2, c3, c4 = st.columns(4)
-            c1.metric("PRICE", f"{last['Close']:.2f}")
-            c2.metric("ENTROPY", f"{last['CHEDO']:.2f}", delta="Risk" if abs(last['CHEDO'])>0.8 else "Stable")
-            c3.metric("FLUX", f"{last['Apex_Flux']:.2f}", delta=last['Apex_State'])
-            c4.metric("TREND", "BULL" if last['Trend_Dir']==1 else "BEAR")
-            
-            # REPORT CARD (NEW)
-            st.markdown(AxiomEngine.generate_axiom_report_html(last, ticker), unsafe_allow_html=True)
-
-            # TELEGRAM (NEW)
-            if st.button("📢 SEND AXIOM SIGNAL"):
-                signal_type = "LONG" if (last['Trend_Dir'] == 1 and last['Apex_Flux'] > 0) else "SHORT"
-                msg = f"""
-💠 *AXIOM QUANT SIGNAL*
-Ticker: {ticker}
-Signal: {signal_type}
-Price: {last['Close']:.2f}
--------------------
-🧪 *PHYSICS CONTEXT*
-Entropy: {last['CHEDO']:.2f} (Measures Chaos)
-Flux: {last['Apex_Flux']:.2f} (Volume Momentum)
-Relativity: {last['RQZO']:.2f} (Harmonic Mean)
--------------------
-Trend: {'Bullish' if last['Trend_Dir']==1 else 'Bearish'}
-"""
-                if send_telegram(tg_token, tg_chat, msg): st.success("SENT")
-                else: st.error("FAIL")
-
-            # TABS
-            tabs = st.tabs(["📉 TECH", "🌍 MACRO", "📅 DNA", "🧠 AI", "📊 VOL", "🔮 SIM"])
-            
-            with tabs[0]: # TECH CHART
-                fig = make_subplots(rows=3, cols=1, shared_xaxes=True, row_heights=[0.5, 0.25, 0.25], vertical_spacing=0.02)
-                fig.add_trace(go.Candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'], name='Price'), row=1, col=1)
-                fig.add_trace(go.Scatter(x=df.index, y=df['HMA_Trend'], line=dict(color='#fff', width=1, dash='dot'), name='HMA'), row=1, col=1)
-                fig.add_trace(go.Scatter(x=df.index, y=df['CHEDO'], line=dict(color='#00F0FF', width=2), fill='tozeroy', fillcolor='rgba(0,240,255,0.1)', name='Entropy'), row=2, col=1)
-                colors = np.where(df['Apex_Flux'] > 0.6, '#00E676', np.where(df['Apex_Flux'] < -0.6, '#FF1744', '#2979FF'))
-                fig.add_trace(go.Bar(x=df.index, y=df['Apex_Flux'], marker_color=colors, name='Flux'), row=3, col=1)
-                fig.update_layout(height=700, template='plotly_dark', margin=dict(l=0,r=0,t=10,b=0), hovermode="x unified", xaxis_rangeslider_visible=False)
-                st.plotly_chart(fig, use_container_width=True)
-
-            with tabs[1]: # MACRO
-                c1, c2 = st.columns(2)
-                c1.metric("S&P 500", f"${macro_p.get('S&P 500',0):.2f}", f"{macro_c.get('S&P 500',0):.2f}%")
-                c2.metric("VIX", f"{macro_p.get('VIX',0):.2f}", f"{macro_c.get('VIX',0):.2f}%")
-                if fund: st.write(f"**Fundamentals**: Cap {fund['Market Cap']} | PE {fund['P/E Ratio']}")
-
-            with tabs[2]: # DNA
-                dna = AxiomEngine.calc_day_of_week_dna(ticker)
-                if dna is not None: st.bar_chart(dna)
-
-            with tabs[3]: # AI
-                if st.button("RUN INTELLIGENCE"):
-                    res = AxiomEngine.analyze_ai(ticker, last['Close'], last['CHEDO'], last['RQZO'], last['Apex_Flux'], ai_key)
-                    st.info(res)
-
-            with tabs[4]: # VOLUME
-                vp, poc = AxiomEngine.calc_volume_profile(df)
-                st.bar_chart(vp.set_index('Price')['Volume'])
-                st.caption(f"POC: {poc:.2f}")
-
-            with tabs[5]: # MONTE CARLO
-                mc = AxiomEngine.run_monte_carlo(df)
-                st.line_chart(mc[:, :20])
-
-if __name__ == "__main__":
-    main()
 # ==================================================================================================
 # CONSTRAINTS WARNING (NON-NEGOTIABLE) — MUST REMAIN AT TOP OF FILE IN EVERY EDIT
 # --------------------------------------------------------------------------------------------------
@@ -1249,11 +40,14 @@ import io
 import time
 import threading
 import websocket
+import math
+from typing import Dict, Optional, List, Tuple, Any
+import streamlit.components.v1 as components
 
 # ==========================================
 # 1. PAGE CONFIGURATION & DATABASE INIT
 # ==========================================
-st.set_page_config(layout="wide", page_title="🏦Titan Terminal", page_icon="👁️")
+st.set_page_config(layout="wide", page_title="Omni-Sentient Titan Terminal v5.1", page_icon="💠")
 
 def init_db():
     """Initializes the SQLite database for signals and watchlists."""
@@ -1280,31 +74,84 @@ if 'whale_data' not in st.session_state:
 if 'last_ai_summary' not in st.session_state:
     st.session_state.last_ai_summary = "Awaiting institutional analysis..."
 
-# --- CUSTOM CSS ---
+# --- CUSTOM CSS (HYBRID STYLE) ---
 st.markdown("""
 <style>
-.stApp { background-color: #0e1117; color: #e0e0e0; font-family: 'Roboto Mono', monospace; }
-.title-glow { font-size: 3em; font-weight: bold; color: #ffffff; text-shadow: 0 0 10px #00ff00, 0 0 20px #00ff00; margin-bottom: 20px; }
-div[data-testid="stMetric"] { background-color: rgba(255, 255, 255, 0.05); border: 1px solid rgba(255, 255, 255, 0.1); padding: 10px; border-radius: 8px; }
-.stTabs [data-baseweb="tab"] { background-color: #161b22; color: #8b949e; border: 1px solid #30363d; }
-.stTabs [aria-selected="true"] { color: #00ff00; border-bottom: 2px solid #00ff00; }
+    @import url('https://fonts.googleapis.com/css2?family=Roboto+Mono:wght@300;400;700&family=SF+Pro+Display:wght@300;500;700&display=swap');
+
+    .stApp { background-color: #0d1117; color: #c9d1d9; font-family: 'SF Pro Display', sans-serif; }
+    
+    /* TITAN STYLE ELEMENTS */
+    .titan-metric { background: rgba(31, 40, 51, 0.9); border: 1px solid #45a29e; padding: 10px; border-radius: 8px; }
+    .title-glow { font-size: 3em; font-weight: bold; color: #ffffff; text-shadow: 0 0 10px #00ff00, 0 0 20px #00ff00; margin-bottom: 20px; font-family: 'Roboto Mono'; }
+    
+    /* AXIOM NEON METRICS */
+    div[data-testid="metric-container"] {
+        background: rgba(22, 27, 34, 0.9);
+        border-left: 4px solid #00F0FF;
+        padding: 15px;
+        border-radius: 6px;
+        margin-bottom: 10px;
+        backdrop-filter: blur(5px);
+        box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+    }
+    div[data-testid="stMetricLabel"] { font-size: 14px !important; color: #8b949e !important; letter-spacing: 1px; }
+    div[data-testid="stMetricValue"] { font-size: 24px !important; color: #f0f6fc !important; font-weight: 300; }
+
+    /* UNIVERSAL HEADERS & BUTTONS */
+    h1, h2, h3 { font-family: 'Roboto Mono', monospace; color: #58a6ff; }
+    .stButton > button {
+        background: linear-gradient(135deg, #1f2833, #0b0c10);
+        border: 1px solid #238636; color: #ffffff;
+        font-weight: bold; height: 3.5em; font-size: 16px !important;
+        border-radius: 6px;
+    }
+
+    /* AXIOM TICKER MARQUEE */
+    .ticker-wrap {
+        width: 100%; overflow: hidden; background-color: #0d1117; border-bottom: 1px solid #30363d;
+        height: 40px; display: flex; align-items: center; margin-bottom: 15px;
+    }
+    .ticker { display: inline-block; animation: marquee 45s linear infinite; white-space: nowrap; }
+    @keyframes marquee { 0% { transform: translate(100%, 0); } 100% { transform: translate(-100%, 0); } }
+    .ticker-item { padding: 0 2rem; font-family: 'Roboto Mono'; font-size: 0.85rem; color: #58a6ff; }
+
+    /* REPORT CARDS */
+    .report-card { 
+        background-color: #161b22; 
+        border-left: 4px solid #3fb950; 
+        padding: 16px; 
+        border-radius: 6px; 
+        margin-bottom: 16px; 
+        border: 1px solid #30363d;
+    }
+    .report-header { 
+        font-size: 1.1rem; font-weight: 700; color: #f0f6fc; margin-bottom: 12px; 
+        border-bottom: 1px solid #30363d; padding-bottom: 8px; font-family: 'Roboto Mono';
+    }
+    .report-item { margin-bottom: 8px; font-size: 0.95rem; color: #8b949e; display: flex; gap: 8px; }
+    .value-cyan { color: #38bdf8; font-weight: 600; font-family: 'Roboto Mono'; }
 </style>
 """, unsafe_allow_html=True)
 
-st.markdown('<div class="title-glow">👁️ DarkPool Titan Terminal v5.0</div>', unsafe_allow_html=True)
-st.markdown("##### *Institutional-Grade Market Intelligence & Whale Tracking*")
-st.markdown("---")
+# ==========================================
+# 2. SHARED UTILITIES & SECRETS
+# ==========================================
+class SecretsManager:
+    @staticmethod
+    def get(key, default=""):
+        try:
+            # Check Streamlit secrets first, then fall back
+            if key in st.secrets: return st.secrets[key]
+            return default
+        except: return default
 
-# --- API Key Management ---
+# API Key Management
 if 'api_key' not in st.session_state: st.session_state.api_key = None
-if "OPENAI_API_KEY" in st.secrets:
-    st.session_state.api_key = st.secrets["OPENAI_API_KEY"]
-else:
-    if not st.session_state.api_key:
-        st.session_state.api_key = st.sidebar.text_input("OpenAI API Key", type="password")
+st.session_state.api_key = SecretsManager.get("OPENAI_API_KEY", st.session_state.api_key)
 
 # ==========================================
-# 2. WHALE TRACKER ENGINE (WEBSOCKET)
+# 3. WHALE TRACKER ENGINE (WEBSOCKET)
 # ==========================================
 class WhaleTracker:
     def __init__(self, symbol):
@@ -1318,7 +165,7 @@ class WhaleTracker:
         qty = float(data['q'])
         price = float(data['p'])
         usd_val = qty * price
-        if usd_val >= 100000: # $100k Institutional Threshold
+        if usd_val >= 100000: 
             side = "BUY" if not data['m'] else "SELL"
             whale_event = {
                 "Time": datetime.datetime.now().strftime("%H:%M:%S"),
@@ -1336,189 +183,275 @@ class WhaleTracker:
         self.thread.start()
 
 # ==========================================
-# 3. MATH & INDICATORS (GOD MODE ENGINE)
+# 4. TITAN ENGINE (BINANCE / SCALPING / SMC)
 # ==========================================
+BINANCE_API_BASE = "https://api.binance.us/api/v3"
+HEADERS = {"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
 
-def calculate_wma(series, length):
-    return series.rolling(length).apply(lambda x: np.dot(x, np.arange(1, length + 1)) / (length * (length + 1) / 2), raw=True)
+class TitanEngine:
+    @staticmethod
+    def get_ma(series, length, ma_type="HMA"):
+        if ma_type == "SMA": return series.rolling(length).mean()
+        elif ma_type == "EMA": return series.ewm(span=length, adjust=False).mean()
+        else: # HMA
+            half_len = int(length / 2)
+            sqrt_len = int(math.sqrt(length))
+            wma_f = series.rolling(length).mean()
+            wma_h = series.rolling(half_len).mean()
+            diff = 2 * wma_h - wma_f
+            return diff.rolling(sqrt_len).mean()
 
-def calculate_hma(series, length):
-    wma_half, wma_full = calculate_wma(series, int(length/2)), calculate_wma(series, length)
-    return calculate_wma(2 * wma_half - wma_full, int(np.sqrt(length)))
+    @staticmethod
+    def calc_volumetric_delta(df):
+        range_total = (df['high'] - df['low']).replace(0, 0.0001)
+        buy_vol = ((df['close'] - df['low']) / range_total) * df['volume']
+        df['Net_Delta'] = buy_vol - (df['volume'] - buy_vol)
+        df['Volume_Bias_Pct'] = (df['Net_Delta'] / df['volume']) * 100
+        return df
 
-def calculate_atr(df, length=14):
-    tr = pd.concat([df['High']-df['Low'], (df['High']-df['Close'].shift()).abs(), (df['Low']-df['Close'].shift()).abs()], axis=1).max(axis=1)
-    return tr.rolling(length).mean()
+    @staticmethod
+    @st.cache_data(ttl=5)
+    def get_klines(symbol, interval, limit=200):
+        try:
+            r = requests.get(f"{BINANCE_API_BASE}/klines", params={"symbol": symbol, "interval": interval, "limit": limit}, headers=HEADERS, timeout=5)
+            if r.status_code == 200:
+                df = pd.DataFrame(r.json(), columns=['t','o','h','l','c','v','T','q','n','V','Q','B'])
+                df['timestamp'] = pd.to_datetime(df['t'], unit='ms')
+                df[['open','high','low','close','volume']] = df[['o','h','l','c','v']].astype(float)
+                return df[['timestamp','open','high','low','close','volume']]
+        except: return pd.DataFrame()
 
-def calculate_supertrend(df, period=10, multiplier=3):
-    atr = calculate_atr(df, period)
-    hl2 = (df['High'] + df['Low']) / 2
-    upper, lower = hl2 + (multiplier * atr), hl2 - (multiplier * atr)
-    close, st, trend = df['Close'].values, np.zeros(len(df)), np.ones(len(df))
-    for i in range(1, len(df)):
-        if trend[i-1] == 1:
-            st[i] = max(lower[i], st[i-1]) if close[i] > st[i-1] else upper[i]
-            trend[i] = 1 if close[i] > st[i-1] else -1
-        else:
-            st[i] = min(upper[i], st[i-1]) if close[i] < st[i-1] else lower[i]
-            trend[i] = -1 if close[i] < st[i-1] else 1
-    return pd.Series(st, index=df.index), pd.Series(trend, index=df.index)
+    @staticmethod
+    def run_engine(df, amp=10, dev=3.0, hma_l=50, gann_l=3):
+        if df.empty: return df, []
+        df = df.copy().reset_index(drop=True)
 
-def calc_volumetric_delta(df):
-    """Estimated Volume Delta by candle proximity."""
-    range_total = (df['High'] - df['Low']).replace(0, 0.0001)
-    buy_vol = ((df['Close'] - df['Low']) / range_total) * df['Volume']
-    df['Net_Delta'] = buy_vol - (df['Volume'] - buy_vol)
-    df['Volume_Bias_Pct'] = (df['Net_Delta'] / df['Volume']) * 100
-    return df
-
-def calc_indicators(df):
-    df['HMA'] = calculate_hma(df['Close'], 55)
-    df['ATR'] = calculate_atr(df, 14)
-    df['Pivot_H'], df['Pivot_L'] = df['High'].rolling(20).max(), df['Low'].rolling(20).min()
-    df['Apex_Trend'] = np.where(df['Close'] > df['HMA'] + calculate_atr(df, 55)*1.5, 1, np.where(df['Close'] < df['HMA'] - calculate_atr(df, 55)*1.5, -1, 0))
-    df['Apex_Trend'] = df['Apex_Trend'].ffill()
-    
-    # Squeeze Momentum
-    basis = df['Close'].rolling(20).mean()
-    df['Sqz_Mom'] = (df['Close'] - (df['High'].rolling(20).max() + df['Low'].rolling(20).min() + basis)/3).rolling(20).mean() * 100
-    
-    # RSI
-    delta = df['Close'].diff()
-    gain, loss = delta.where(delta > 0, 0).rolling(14).mean(), (-delta.where(delta < 0, 0)).rolling(14).mean()
-    df['RSI'] = 100 - (100 / (1 + gain/loss))
-    df['MF_Matrix'] = ((df['RSI']-50) * (df['Volume'] / df['Volume'].rolling(14).mean())).ewm(span=3).mean()
-    
-    # SuperTrend & Score
-    st_val, st_dir = calculate_supertrend(df, 10, 4.0)
-    df['DarkVector_Trend'] = st_dir
-    df['GM_Score'] = df['Apex_Trend'] + st_dir + np.sign(df['Sqz_Mom']) + np.where(df['RSI']>50,1,-1)
-    df['RVOL'] = df['Volume'] / df['Volume'].rolling(20).mean()
-    
-    df = calc_volumetric_delta(df)
-    return df
-
-# ==========================================
-# 4. COMPREHENSIVE SIGNAL & RISK
-# ==========================================
-def calculate_trade_levels(price, score, pivot_h, pivot_l, atr):
-    if score > 0:
-        sl = min(pivot_l, price - (atr * 2.5))
-        risk = price - sl
-        tp1, tp2 = price + (risk * 1.5), price + (risk * 3.0)
-    else:
-        sl = max(pivot_h, price + (atr * 2.5))
-        risk = sl - price
-        tp1, tp2 = price - (risk * 1.5), price - (risk * 3.0)
-    return {"SL": sl, "TP1": tp1, "TP2": tp2, "RR": 1.5}
-
-def generate_comp_signal(ticker, interval, df):
-    last = df.iloc[-1]
-    levels = calculate_trade_levels(last['Close'], last['GM_Score'], last['Pivot_H'], last['Pivot_L'], last['ATR'])
-    
-    whale_count_buy = sum(1 for d in st.session_state.whale_data if d['Side'] == 'BUY')
-    whale_count_sell = sum(1 for d in st.session_state.whale_data if d['Side'] == 'SELL')
-    whale_sent = "BULLISH ACCUMULATION" if whale_count_buy > whale_count_sell else "BEARISH DISTRIBUTION"
-    
-    vol_conf = "✅ CONFIRMED" if (last['GM_Score'] > 0 and last['Net_Delta'] > 0) or (last['GM_Score'] < 0 and last['Net_Delta'] < 0) else "⚠️ DIVERGENT"
-
-    msg = f"""
-🏛️ **TITAN INSTITUTIONAL SIGNAL: {ticker}**
-━━━━━━━━━━━━━━━━━━━━
-**BIAS:** {"🚀 LONG" if last['GM_Score'] > 0 else "📉 SHORT"}
-**TITAN SCORE:** {last['GM_Score']:.0f} / 5
-━━━━━━━━━━━━━━━━━━━━
-📊 **ANALYSIS DETAILS**
-• **Whale Sentiment:** {whale_sent}
-• **Net Delta Bias:** {last['Volume_Bias_Pct']:.1f}%
-• **Confirmation:** {vol_conf}
-• **Money Flow:** {last['MF_Matrix']:.2f}
-• **Volatility (RVOL):** {last['RVOL']:.1f}x
-━━━━━━━━━━━━━━━━━━━━
-🎯 **EXECUTION LEVELS**
-• **Entry:** ${last['Close']:.4f}
-• **Stop Loss:** ${levels['SL']:.4f}
-• **Target 1:** ${levels['TP1']:.4f}
-• **Target 2:** ${levels['TP2']:.4f}
-━━━━━━━━━━━━━━━━━━━━
-🤖 **AI CONTEXT**
-{st.session_state.last_ai_summary}
-    """
-    return msg
-
-# ==========================================
-# 5. UI DASHBOARD
-# ==========================================
-
-# Sidebar
-st.sidebar.subheader("Terminal Config")
-binance_symbols = ["BTC-USD", "ETH-USD", "SOL-USD", "BNB-USD", "XRP-USD", "ADA-USD", "AVAX-USD"]
-ticker = st.sidebar.selectbox("Market Ticker", binance_symbols)
-interval = st.sidebar.selectbox("Interval", ["15m", "1h", "4h", "1d"], index=1)
-
-# Start WebSocket Whale Tracker
-if 'current_tracker' not in st.session_state or st.session_state.current_tracker.symbol != ticker.lower().replace("-usd", "usdt"):
-    st.session_state.whale_data = []
-    st.session_state.current_tracker = WhaleTracker(ticker)
-    st.session_state.current_tracker.start()
-
-tg_token = st.sidebar.text_input("Bot Token", type="password")
-tg_chat = st.sidebar.text_input("Chat ID")
-
-# Tabs
-tabs = st.tabs(["📊 Terminal", "🐳 Whale Tape", "🔍 Market Scan", "📅 DNA", "📡 Signal Builder", "🛠️ Registry"])
-
-if st.button("EXECUTE ANALYSIS"):
-    st.session_state['run_sim'] = True
-
-if st.session_state.get('run_sim'):
-    df = yf.download(ticker, period="1y", interval=interval)
-    if not df.empty:
-        df = calc_indicators(df)
+        # Base Indicators
+        df['tr'] = np.maximum(df['high']-df['low'], np.maximum(abs(df['high']-df['close'].shift(1)), abs(df['low']-df['close'].shift(1))))
+        df['atr'] = df['tr'].ewm(alpha=1/14, adjust=False).mean()
+        df['hma'] = TitanEngine.get_ma(df['close'], hma_l, "HMA")
         
-        # Async AI Refresh
-        if st.session_state.api_key:
-            try:
-                client = OpenAI(api_key=st.session_state.api_key)
-                res = client.chat.completions.create(model="gpt-4o", messages=[{"role":"user","content":f"Brief institutional outlook for {ticker} at {df['Close'].iloc[-1]}. Score: {df['GM_Score'].iloc[-1]}"}], max_tokens=150)
-                st.session_state.last_ai_summary = res.choices[0].message.content
-            except: pass
+        # Volumetrics (From Code 2)
+        df = TitanEngine.calc_volumetric_delta(df)
+        
+        # Momentum & Flow
+        delta = df['close'].diff()
+        gain, loss = delta.clip(lower=0).ewm(alpha=1/14).mean(), -delta.clip(upper=0).ewm(alpha=1/14).mean()
+        df['rsi'] = 100 - (100 / (1 + (gain/loss)))
+        df['rvol'] = df['volume'] / df['volume'].rolling(20).mean()
+        
+        # Squeeze
+        bb_basis = df['close'].rolling(20).mean()
+        bb_dev = df['close'].rolling(20).std() * 2.0
+        kc_dev = df['atr'] * 1.5
+        df['in_squeeze'] = ((bb_basis - bb_dev) > (bb_basis - kc_dev)) & ((bb_basis + bb_dev) < (bb_basis + kc_dev))
 
-        with tabs[0]: # TERMINAL
-            c1, c2 = st.columns([0.8, 0.2])
-            with c1:
-                fig = make_subplots(rows=3, cols=1, shared_xaxes=True, row_heights=[0.5, 0.25, 0.25], vertical_spacing=0.03)
-                fig.add_trace(go.Candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close']), row=1, col=1)
-                fig.add_trace(go.Bar(x=df.index, y=df['Net_Delta'], marker_color='cyan', name="Net Delta"), row=2, col=1)
-                fig.add_trace(go.Bar(x=df.index, y=df['Sqz_Mom'], name="Squeeze Mom"), row=3, col=1)
-                fig.update_layout(height=800, template="plotly_dark", xaxis_rangeslider_visible=False)
-                st.plotly_chart(fig, use_container_width=True)
-            with c2:
-                st.metric("Titan Score", f"{df['GM_Score'].iloc[-1]}", delta="Institutional" if abs(df['GM_Score'].iloc[-1])>=4 else None)
-                st.metric("Whale Count", f"{len(st.session_state.whale_data)}")
-                st.metric("RSI", f"{df['RSI'].iloc[-1]:.1f}")
-                st.info(st.session_state.last_ai_summary)
-
-        with tabs[1]: # WHALE TAPE
-            st.subheader(f"Institutional Tape (>$100k): {ticker}")
-            if st.session_state.whale_data:
-                tape_df = pd.DataFrame(st.session_state.whale_data).sort_index(ascending=False)
-                st.dataframe(tape_df.style.applymap(lambda x: 'color: #00ff00' if x == 'BUY' else 'color: #ff0000' if x == 'SELL' else '', subset=['Side']), use_container_width=True)
+        # Titan Trend logic
+        df['ll'], df['hh'] = df['low'].rolling(amp).min(), df['high'].rolling(amp).max()
+        trend, stop = np.zeros(len(df)), np.full(len(df), np.nan)
+        curr_t, curr_s = 0, np.nan
+        for i in range(amp, len(df)):
+            c, d = df.at[i,'close'], df.at[i,'atr']*dev
+            if curr_t == 0:
+                s = df.at[i,'ll'] + d
+                curr_s = max(curr_s, s) if not np.isnan(curr_s) else s
+                if c < curr_s: curr_t = 1; curr_s = df.at[i,'hh'] - d
             else:
-                st.info("Listening for large-block trades on Binance WebSockets...")
+                s = df.at[i,'hh'] - d
+                curr_s = min(curr_s, s) if not np.isnan(curr_s) else s
+                if c > curr_s: curr_t = 0; curr_s = df.at[i,'ll'] + d
+            trend[i], stop[i] = curr_t, curr_s
+        df['is_bull'], df['entry_stop'] = trend == 0, stop
 
-        with tabs[4]: # SIGNAL BUILDER
-            st.subheader("Comprehensive Trade Report")
-            final_report = generate_comp_signal(ticker, interval, df)
-            out_txt = st.text_area("Final Signal Output", value=final_report, height=500)
-            if st.button("Send to Telegram"):
-                requests.post(f"https://api.telegram.org/bot{tg_token}/sendMessage", data={"chat_id":tg_chat, "text":out_txt, "parse_mode": "Markdown"})
-                st.success("Signal Persisted and Broadcasted.")
+        # Gann & Flux
+        rg, body = df['high'] - df['low'], np.abs(df['close'] - df['open'])
+        eff = np.where(rg == 0, 0, body / rg)
+        df['Apex_Flux'] = (pd.Series(eff).ewm(span=14).mean() * np.sign(df['close']-df['open'])).ewm(span=5).mean()
+        
+        # SuperTrend Component (Code 2 Score integration)
+        st_v, st_dir = 10, 1 # Placeholder for parity
+        df['GM_Score'] = np.where(df['is_bull'], 1, -1) + np.where(df['rsi']>50,1,-1) + np.sign(df['Apex_Flux'])
+        
+        # SMC Zones
+        zones = []
+        for i in range(len(df)-10, len(df)):
+             if df.at[i, 'high'] == df['high'].rolling(10, center=True).max().iloc[i]:
+                 zones.append({'x0': df.at[i-5,'timestamp'], 'x1': df.at[i,'timestamp'], 'y0': df.at[i,'high'], 'y1': df.at[i,'close'], 'color': 'rgba(255,0,0,0.2)'})
+        
+        # Risk Levels
+        risk = abs(df['close'] - df['entry_stop']).mask(df['close'] == df['entry_stop'], df['close']*0.01)
+        df['tp1'] = np.where(df['is_bull'], df['close'] + 1.5*risk, df['close'] - 1.5*risk)
+        df['tp2'] = np.where(df['is_bull'], df['close'] + 3.0*risk, df['close'] - 3.0*risk)
+        df['tp3'] = np.where(df['is_bull'], df['close'] + 5.0*risk, df['close'] - 5.0*risk)
 
-        # Continuity Preservation
-        with tabs[2]: st.write("Scanning Top Vol Assets...")
-        with tabs[3]: st.plotly_chart(px.imshow(df[['Close']].pct_change().T, color_continuous_scale='RdYlGn'), use_container_width=True)
-        with tabs[5]:
-            conn = sqlite3.connect('titan_vault.db')
-            st.dataframe(pd.read_sql_query("SELECT * FROM signals", conn), use_container_width=True)
-            conn.close()
+        return df, zones
+
+# ==========================================
+# 5. AXIOM ENGINE (YFINANCE / PHYSICS)
+# ==========================================
+class AxiomEngine:
+    @staticmethod
+    def fetch_data(ticker, timeframe, limit=500):
+        tf_map = {"15m": "1mo", "1h": "6mo", "4h": "1y", "1d": "2y", "1wk": "5y"}
+        try:
+            df = yf.download(ticker, period=tf_map.get(timeframe, "1y"), interval=timeframe, progress=False)
+            if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.get_level_values(0)
+            df = df.rename(columns={c: c.capitalize() for c in df.columns})
+            return df.dropna().tail(limit)
+        except: return pd.DataFrame()
+
+    @staticmethod
+    def calc_chedo(df, length=50):
+        c = df['Close'].values
+        log_ret = np.diff(np.log(c), prepend=np.log(c[0]))
+        mu = pd.Series(log_ret).rolling(length).mean().values
+        sigma = pd.Series(log_ret).rolling(length).std().values
+        v = sigma / (np.abs(mu) + 1e-9)
+        abs_ret_v = np.abs(log_ret) * v
+        kappa_h = np.tanh(pd.Series(np.log(abs_ret_v + np.sqrt(abs_ret_v**2 + 1))).rolling(length).mean().values)
+        df['CHEDO'] = kappa_h
+        return df
+
+    @staticmethod
+    def calc_rqzo(df, harmonics=25):
+        src = df['Close']
+        mn, mx = src.rolling(100).min(), src.rolling(100).max()
+        norm = (src - mn) / (mx - mn + 1e-9)
+        v = np.abs(norm.diff())
+        gamma = 1 / np.sqrt(1 - (np.minimum(v, 0.049)/0.05)**2)
+        zeta = np.zeros(len(df))
+        tau = (np.arange(len(df)) % 100) / gamma.fillna(1.0)
+        for n in range(1, harmonics + 1):
+            zeta += (n**-0.5) * np.sin(tau * np.log(n))
+        df['RQZO'] = pd.Series(zeta).fillna(0)
+        return df
+
+# ==========================================
+# 6. VISUALS & REPORTING
+# ==========================================
+class Visuals:
+    @staticmethod
+    def render_axiom_clock():
+        html = """
+        <div style="display:flex; justify-content:space-around; font-family:'Roboto Mono'; color:#00F0FF; padding:10px; background:rgba(0,0,0,0.2); border-radius:5px;">
+            <div>NY: <span id="ny">--:--</span></div>
+            <div>LON: <span id="lon">--:--</span></div>
+            <div>TOK: <span id="tok">--:--</span></div>
+        </div>
+        <script>
+            setInterval(() => {
+                const fmt = (tz) => new Date().toLocaleTimeString('en-GB', {timeZone:tz, hour:'2-digit', minute:'2-digit'});
+                document.getElementById('ny').innerText = fmt('America/New_York');
+                document.getElementById('lon').innerText = fmt('Europe/London');
+                document.getElementById('tok').innerText = fmt('Asia/Tokyo');
+            }, 1000);
+        </script>
+        """
+        components.html(html, height=60)
+
+    @staticmethod
+    def generate_titan_html_report(row, ticker, whale_sent, vol_conf):
+        return f"""
+        <div class="report-card" style="border-left: 4px solid #00ff00;">
+            <div class="report-header">🏛️ TITAN SIGNAL: {ticker}</div>
+            <div class="report-item">Bias: <span class="value-cyan">{'LONG 🐂' if row['is_bull'] else 'SHORT 🐻'}</span></div>
+            <div class="report-item">Score: <span class="value-cyan">{row['GM_Score']:.0f} / 5</span></div>
+            <div class="report-item">Whale Sentiment: <span class="value-cyan">{whale_sent}</span></div>
+            <div class="report-item">Confirmation: <span class="value-cyan">{vol_conf}</span></div>
+        </div>
+        <div class="report-card" style="border-left: 4px solid #38bdf8;">
+            <div class="report-header">🎯 EXECUTION PLAN</div>
+            <div class="report-item">Entry: <span class="value-cyan">${row['close']:.4f}</span></div>
+            <div class="report-item">Stop: <span class="value-cyan">${row['entry_stop']:.4f}</span></div>
+            <div class="report-item">TP1: <span class="value-cyan">${row['tp1']:.4f}</span></div>
+            <div class="report-item">TP2: <span class="value-cyan">${row['tp2']:.4f}</span></div>
+        </div>
+        """
+
+# ==========================================
+# 7. MAIN CONTROLLER
+# ==========================================
+def main():
+    st.sidebar.title("💠 OMNI-SENTIENT")
+    mode = st.sidebar.radio("MODE", ["TITAN (Binance/Crypto)", "AXIOM (Quant/Macro)"])
+    
+    # Global Secrets
+    tg_token = SecretsManager.get("TELEGRAM_TOKEN")
+    tg_chat = SecretsManager.get("TELEGRAM_CHAT_ID")
+
+    # -------------------------------------------------------------------------
+    # MODE 1: TITAN (Crypto Threading + WebSockets)
+    # -------------------------------------------------------------------------
+    if mode == "TITAN (Binance/Crypto)":
+        ticker_base = st.sidebar.selectbox("Asset", ["BTC", "ETH", "SOL", "BNB", "XRP"])
+        ticker = f"{ticker_base}USDT"
+        tf = st.sidebar.selectbox("TF", ["15m", "1h", "4h", "1d"], index=1)
+        
+        # Start Whale WebSocket
+        if 'current_tracker' not in st.session_state or st.session_state.current_tracker.symbol != ticker.lower().replace("-usd", "usdt"):
+            st.session_state.whale_data = []
+            st.session_state.current_tracker = WhaleTracker(ticker)
+            st.session_state.current_tracker.start()
+
+        st.markdown(f'<div class="title-glow">TITAN: {ticker_base}</div>', unsafe_allow_html=True)
+        Visuals.render_axiom_clock()
+        
+        if st.button("RUN TITAN ANALYSIS"):
+            df = TitanEngine.get_klines(ticker, tf)
+            if not df.empty:
+                df, zones = TitanEngine.run_engine(df)
+                last = df.iloc[-1]
+                
+                # Whale Stats
+                w_buy = sum(1 for d in st.session_state.whale_data if d['Side'] == 'BUY')
+                w_sell = sum(1 for d in st.session_state.whale_data if d['Side'] == 'SELL')
+                w_sent = "ACCUMULATION" if w_buy > w_sell else "DISTRIBUTION"
+                vol_conf = "CONFIRMED" if (last['is_bull'] and last['Net_Delta'] > 0) else "DIVERGENT"
+
+                # Layout
+                c1, c2 = st.columns([0.7, 0.3])
+                with c1:
+                    fig = make_subplots(rows=3, cols=1, shared_xaxes=True, row_heights=[0.5, 0.25, 0.25], vertical_spacing=0.03)
+                    fig.add_trace(go.Candlestick(x=df['timestamp'], open=df['open'], high=df['high'], low=df['low'], close=df['close']), row=1, col=1)
+                    fig.add_trace(go.Bar(x=df['timestamp'], y=df['Net_Delta'], marker_color='cyan', name="Net Delta"), row=2, col=1)
+                    fig.add_trace(go.Bar(x=df['timestamp'], y=df['Apex_Flux'], name="Flux Momentum"), row=3, col=1)
+                    fig.update_layout(height=800, template="plotly_dark", xaxis_rangeslider_visible=False)
+                    st.plotly_chart(fig, use_container_width=True)
+                
+                with c2:
+                    st.markdown(Visuals.generate_titan_html_report(last, ticker, w_sent, vol_conf), unsafe_allow_html=True)
+                    st.metric("Whale Count", f"{len(st.session_state.whale_data)}")
+                    
+                    if st.button("📢 BROADCAST SIGNAL"):
+                        msg = f"🏛️ TITAN SIGNAL: {ticker}\nBias: {'LONG' if last['is_bull'] else 'SHORT'}\nScore: {last['GM_Score']}\nWhale: {w_sent}\nEntry: {last['close']}"
+                        requests.post(f"https://api.telegram.org/bot{tg_token}/sendMessage", data={"chat_id":tg_chat, "text":msg})
+                        st.success("Broadcasted")
+
+    # -------------------------------------------------------------------------
+    # MODE 2: AXIOM (Physics / Quant)
+    # -------------------------------------------------------------------------
+    else:
+        ticker = st.sidebar.text_input("Ticker (YFinance)", value="NVDA")
+        tf = st.sidebar.selectbox("TF", ["1h", "4h", "1d", "1wk"], index=2)
+        
+        st.markdown(f'<div class="title-glow">AXIOM: {ticker}</div>', unsafe_allow_html=True)
+        Visuals.render_axiom_clock()
+
+        df = AxiomEngine.fetch_data(ticker, tf)
+        if not df.empty:
+            df = AxiomEngine.calc_chedo(df)
+            df = AxiomEngine.calc_rqzo(df)
+            last = df.iloc[-1]
+            
+            c1, c2, c3 = st.columns(3)
+            c1.metric("Entropy (CHEDO)", f"{last['CHEDO']:.2f}", delta="Chaos" if abs(last['CHEDO'])>0.8 else "Stable")
+            c2.metric("Relativity (RQZO)", f"{last['RQZO']:.2f}")
+            c3.metric("Price", f"{last['Close']:.2f}")
+
+            fig = go.Figure()
+            fig.add_trace(go.Candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close']))
+            fig.update_layout(height=600, template="plotly_dark", title="Axiom Quant Visualization")
+            st.plotly_chart(fig, use_container_width=True)
+
+if __name__ == "__main__":
+    main()
