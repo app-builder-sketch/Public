@@ -1,7 +1,7 @@
 
 """
-Trade Signals 
-Version 18.2.1: AI-Powered Analysis + Enhanced Signal Validation
+Signals-MOBILE 
+Version 18.3: Trailing Stops + AI-Powered Analysis + Enhanced Signal Validation
 """
 
 import time
@@ -216,6 +216,38 @@ def analyze_asset_and_timeframe(symbol: str, timeframe: str, df: pd.DataFrame) -
     }
 
 # =============================================================================
+# TRAILING STOP ENGINE (NEW)
+# =============================================================================
+def calculate_trailing_stop(current_price: float, entry_price: float, initial_stop: float, 
+                           tp1: float, tp2: float, tp3: float, is_long: bool) -> float:
+    """
+    Calculate trailing stop based on price position relative to TP levels
+    Ladder: 
+    - Before TP1: initial_stop
+    - At/Above TP1: breakeven
+    - At/Above TP2: TP1
+    - At/Above TP3: TP2
+    """
+    if is_long:
+        if current_price >= tp3:
+            return tp2  # Lock in TP1 after TP3 hit
+        elif current_price >= tp2:
+            return tp1  # Lock in TP1 after TP2 hit
+        elif current_price >= tp1:
+            return entry_price  # Breakeven after TP1 hit
+        else:
+            return initial_stop
+    else:
+        if current_price <= tp3:
+            return tp2
+        elif current_price <= tp2:
+            return tp1
+        elif current_price <= tp1:
+            return entry_price
+        else:
+            return initial_stop
+
+# =============================================================================
 # TICKER UNIVERSE (AUTO-LOAD FROM BINANCE US)
 # =============================================================================
 @st.cache_data(ttl=3600)
@@ -284,7 +316,7 @@ def render_ticker_tape(selected_symbol: str):
 
 # HEADER with JS Clock (Stacked for Mobile)
 st.title("💠 TITAN-SIGNALS")
-st.caption("v18.2.1 | AI TRADING ENGINE | Enhanced Signal Validation")
+st.caption("v18.3 | AI TRADING ENGINE | Trailing Stops + Enhanced Validation")
 
 # Mobile Clock
 components.html(
@@ -349,7 +381,7 @@ with st.sidebar:
             quick_base = st.selectbox("Quick Ticker", options, index=(options.index("BTC") if "BTC" in options else 0))
             q1, q2 = st.columns([1, 1])
             with q1:
-                if st.button("Use Quick", use_container_width=True):
+                if st.button("Use Quick Ticker", use_container_width=True):
                     st.session_state.symbol_input = quick_base
             with q2:
                 st.caption(f"{len(bases_all)} tickers loaded")
@@ -381,6 +413,11 @@ with st.sidebar:
         tp1_r = st.number_input("TP1 (R)", value=1.5)
         tp2_r = st.number_input("TP2 (R)", value=3.0)
         tp3_r = st.number_input("TP3 (R)", value=5.0)
+
+    # NEW: Trailing Stop Toggle
+    with st.expander("🛑 TRADE MANAGEMENT"):
+        use_trailing = st.toggle("Enable Trailing Stops", value=True)
+        st.caption("TP1→Breakeven, TP2→TP1, TP3→TP2")
 
     st.markdown("---")
     st.subheader("🤖 NOTIFICATIONS")
@@ -427,39 +464,126 @@ def calculate_fear_greed_index(df):
     except:
         return 50
 
-def run_backtest(df, tp1_r):
+def run_backtest(df, tp1_r, tp2_r, tp3_r, use_trailing):
+    """
+    Enhanced backtest with trailing stop simulation
+    Simulates hitting TP1, TP2, TP3 in sequence with stop adjustments
+    """
     trades = []
     signals = df[(df['buy']) | (df['sell'])]
+    
     for idx, row in signals.iterrows():
-        future = df.loc[idx+1: idx+20]
+        future = df.loc[idx+1: idx+30]  # Extended lookforward for TP2/TP3
         if future.empty:
             continue
-        entry = row['close']; stop = row['entry_stop']; tp1 = row['tp1']; is_long = row['is_bull']
-        outcome = "PENDING"; pnl = 0
-        if is_long:
-            if future['high'].max() >= tp1:
-                outcome = "WIN"; pnl = abs(entry - stop) * tp1_r
-            elif future['low'].min() <= stop:
-                outcome = "LOSS"; pnl = -abs(entry - stop)
-        else:
-            if future['low'].min() <= tp1:
-                outcome = "WIN"; pnl = abs(entry - stop) * tp1_r
-            elif future['high'].max() >= stop:
-                outcome = "LOSS"; pnl = -abs(entry - stop)
+            
+        entry = row['close']
+        initial_stop = row['entry_stop']
+        tp1 = row['tp1']
+        tp2 = row['tp2']
+        tp3 = row['tp3']
+        is_long = row['is_bull']
+        
+        # Track trade state
+        current_stop = initial_stop
+        highest_tp_hit = 0  # 0=none, 1=TP1, 2=TP2, 3=TP3
+        outcome = "PENDING"
+        pnl = 0
+        
+        # Simulate price action bar by bar
+        for _, candle in future.iterrows():
+            high = candle['high']
+            low = candle['low']
+            close = candle['close']
+            
+            if is_long:
+                # Check TP hits in sequence
+                if highest_tp_hit == 0 and high >= tp1:
+                    highest_tp_hit = 1
+                    if use_trailing:
+                        current_stop = entry  # Breakeven
+                        
+                if highest_tp_hit == 1 and high >= tp2:
+                    highest_tp_hit = 2
+                    if use_trailing:
+                        current_stop = tp1  # Lock TP1
+                        
+                if highest_tp_hit == 2 and high >= tp3:
+                    highest_tp_hit = 3
+                    if use_trailing:
+                        current_stop = tp2  # Lock TP2
+                
+                # Check stop loss
+                if low <= current_stop:
+                    if highest_tp_hit == 0:
+                        outcome = "LOSS"
+                        pnl = -abs(entry - initial_stop)
+                    else:
+                        outcome = f"WIN_TP{highest_tp_hit}"
+                        pnl = abs(entry - current_stop) * (1 if highest_tp_hit == 1 else 
+                                                           2 if highest_tp_hit == 2 else 3)
+                    break
+                    
+                # Check if we held to end
+                if highest_tp_hit == 3:
+                    outcome = "WIN_TP3"
+                    pnl = abs(entry - tp3)
+                    break
+                    
+            else:  # Short trade
+                if highest_tp_hit == 0 and low <= tp1:
+                    highest_tp_hit = 1
+                    if use_trailing:
+                        current_stop = entry
+                        
+                if highest_tp_hit == 1 and low <= tp2:
+                    highest_tp_hit = 2
+                    if use_trailing:
+                        current_stop = tp1
+                        
+                if highest_tp_hit == 2 and low <= tp3:
+                    highest_tp_hit = 3
+                    if use_trailing:
+                        current_stop = tp2
+                
+                if high >= current_stop:
+                    if highest_tp_hit == 0:
+                        outcome = "LOSS"
+                        pnl = -abs(entry - initial_stop)
+                    else:
+                        outcome = f"WIN_TP{highest_tp_hit}"
+                        pnl = abs(entry - current_stop) * (1 if highest_tp_hit == 1 else 
+                                                           2 if highest_tp_hit == 2 else 3)
+                    break
+                    
+                if highest_tp_hit == 3:
+                    outcome = "WIN_TP3"
+                    pnl = abs(entry - tp3)
+                    break
+        
         if outcome != "PENDING":
-            trades.append({'outcome': outcome, 'pnl': pnl})
+            trades.append({
+                'outcome': outcome,
+                'pnl': pnl,
+                'tp_reached': highest_tp_hit,
+                'exit_stop': current_stop
+            })
 
     if not trades:
         return 0, 0, 0, pd.DataFrame()
+        
     df_res = pd.DataFrame(trades)
     total = len(df_res)
-    win_rate = (len(df_res[df_res['outcome'] == 'WIN']) / total) * 100
-    net_r = (len(df_res[df_res['outcome'] == 'WIN']) * tp1_r) - len(df_res[df_res['outcome'] == 'LOSS'])
-    avg_trade = df_res['pnl'].mean()
-    return total, win_rate, net_r, avg_trade
+    wins = len(df_res[df_res['outcome'].str.contains('WIN')])
+    win_rate = (wins / total) * 100
+    net_r = df_res['pnl'].sum()
+    avg_tp = df_res['tp_reached'].mean()
+    
+    return total, win_rate, net_r, df_res
 
 # --- MOBILE OPTIMIZED REPORT GENERATOR ---
-def generate_mobile_report(row, symbol, tf, fibs, fg_index, smart_stop, ai_analysis: Dict):
+def generate_mobile_report(row, symbol, tf, fibs, fg_index, smart_stop, 
+                          ai_analysis: Dict, use_trailing: bool):
     is_bull = row['is_bull']
     direction = "LONG 🐂" if is_bull else "SHORT 🐻"
 
@@ -512,6 +636,33 @@ def generate_mobile_report(row, symbol, tf, fibs, fg_index, smart_stop, ai_analy
         <div class="report-item">3️⃣ TP3 ({tp3_r}R): <span class="highlight">{row['tp3']:.4f}</span></div>
     </div>
     """
+    
+    # NEW: TRADE MANAGEMENT CARD with Trailing Stops
+    if use_trailing:
+        trail_html = f"""
+        <div class="report-card" style="border-left-color: #00e676;">
+            <div class="report-header">📈 TRADE MANAGEMENT (Trailing)</div>
+            <div class="report-item">🔄 Trailing: <span class="highlight">ENABLED</span></div>
+            <div class="report-item">📍 Initial Stop: <span class="highlight">{smart_stop:.4f}</span></div>
+            <div class="report-item">🔒 At TP1 ({tp1_r}R): <span class="highlight">Move to Breakeven ({row['close']:.4f})</span></div>
+            <div class="report-item">🔒 At TP2 ({tp2_r}R): <span class="highlight">Lock TP1 ({row['tp1']:.4f})</span></div>
+            <div class="report-item">🔒 At TP3 ({tp3_r}R): <span class="highlight">Lock TP2 ({row['tp2']:.4f})</span></div>
+            <div class="report-item">🎯 Max Risk: <span class="highlight">{abs(row['close'] - smart_stop):.4f}</span></div>
+            <div class="report-item" style="color:#ffd740; font-size:12px;">Rinse & Repeat: Let runners trail</div>
+        </div>
+        """
+        report_html += trail_html
+    else:
+        static_html = f"""
+        <div class="report-card" style="border-left-color: #ff9800;">
+            <div class="report-header">📊 TRADE MANAGEMENT (Static)</div>
+            <div class="report-item">🔄 Trailing: <span class="highlight">DISABLED</span></div>
+            <div class="report-item">🛑 Fixed Stop: <span class="highlight">{smart_stop:.4f}</span></div>
+            <div class="report-item">✅ Take Profits: <span class="highlight">All 3 TPs Static</span></div>
+        </div>
+        """
+        report_html += static_html
+    
     return report_html
 
 def send_telegram_msg(token, chat, msg):
@@ -694,11 +845,17 @@ if not df.empty:
     else:
         smart_stop = max(last['entry_stop'], fibs['fib_618'] * 1.0005)
 
+    # Calculate current trailing stop for display
+    current_trailing_stop = calculate_trailing_stop(
+        last['close'], last['close'], smart_stop,
+        last['tp1'], last['tp2'], last['tp3'], last['is_bull']
+    )
+
     # AI Analysis
     ai_analysis = analyze_asset_and_timeframe(symbol, timeframe, df)
     
     # ----------------------------------------------------
-    # AI ANALYSIS CARD (New)
+    # AI ANALYSIS CARD
     # ----------------------------------------------------
     st.markdown("### 🤖 AI MARKET ANALYSIS")
     ai_col1, ai_col2 = st.columns([1, 2])
@@ -735,7 +892,6 @@ if not df.empty:
     # Row 1: Price Widget + Trend
     c_m1, c_m2 = st.columns(2)
     with c_m1:
-        # FIX: Proper JSON serialization for JavaScript
         tv_symbol = f"BINANCE:{symbol}"
         tv_config = {
             "symbol": tv_symbol,
@@ -758,14 +914,15 @@ if not df.empty:
     # Row 2: Stops & Targets
     c_m3, c_m4 = st.columns(2)
     with c_m3:
-        st.metric("STOP", f"{smart_stop:.2f}")
+        st.metric("INITIAL STOP", f"{smart_stop:.2f}")
     with c_m4:
-        st.metric("TP3", f"{last['tp3']:.2f}")
+        st.metric("TP3 TARGET", f"{last['tp3']:.2f}")
 
     # ----------------------------------------------------
     # REPORT & ACTIONS (Stacked for Mobile)
     # ----------------------------------------------------
-    report_html = generate_mobile_report(last, symbol, timeframe, fibs, fg_index, smart_stop, ai_analysis)
+    report_html = generate_mobile_report(last, symbol, timeframe, fibs, fg_index, smart_stop, 
+                                       ai_analysis, use_trailing)
 
     # Display the HTML Report Card directly
     st.markdown(report_html, unsafe_allow_html=True)
@@ -783,15 +940,19 @@ if not df.empty:
 
     with b_col2:
         if st.button("📝 REPORT TG", use_container_width=True):
-            # Create text version of report
+            # Create text version including trailing rules
+            trail_status = "TRAILING ON" if use_trailing else "TRAILING OFF"
             txt_rep = f"""
 SIGNAL: {symbol} {'LONG' if last['is_bull'] else 'SHORT'}
 Confidence: {('HIGH' if last['rvol'] > 1.5 else 'MEDIUM')}
 Entry: {last['close']:.4f}
-Stop: {smart_stop:.4f}
+Initial Stop: {smart_stop:.4f}
 TP1: {last['tp1']:.4f}
+TP2: {last['tp2']:.4f}
+TP3: {last['tp3']:.4f}
 Timeframe Score: {ai_analysis['timeframe_score']}/100
 Market Regime: {ai_analysis['market_regime']}
+Trade Mgmt: {trail_status}
             """
             if send_telegram_msg(tg_token, tg_chat, f"REPORT: {symbol}\n{txt_rep}"):
                 st.success("SENT")
@@ -799,14 +960,15 @@ Market Regime: {ai_analysis['market_regime']}
                 st.error("FAIL")
 
     # Backtest Mini-Stat
-    b_total, b_win, b_net, b_avg = run_backtest(df, tp1_r)
+    b_total, b_win, b_net, b_df = run_backtest(df, tp1_r, tp2_r, tp3_r, use_trailing)
     if b_total > 0:
-        st.caption(f"📊 Live Stats: {b_win:.1f}% Win Rate | {b_net:.1f}R Net ({b_total} Trades) | Avg: {b_avg:.2f}R")
+        avg_tp = b_df['tp_reached'].mean() if 'tp_reached' in b_df.columns else 0
+        st.caption(f"📊 Live Stats: {b_win:.1f}% Win | {b_net:.1f}R Net ({b_total} Trades) | Avg TP: {avg_tp:.1f}")
     else:
         st.caption("📊 No completed trades in lookback period")
 
     # ----------------------------------------------------
-    # MAIN CHART (Enhanced with AI levels)
+    # MAIN CHART (Enhanced with trailing stop visualization)
     # ----------------------------------------------------
     fig = go.Figure()
     fig.add_candlestick(x=df['timestamp'], open=df['open'], high=df['high'], low=df['low'], close=df['close'], name='Price')
@@ -817,6 +979,11 @@ Market Regime: {ai_analysis['market_regime']}
     fig.add_hline(y=fibs['fib_618'], line_dash="dash", line_color="#ffd740", annotation_text="FIB 0.618")
     fig.add_hline(y=fibs['fib_500'], line_dash="dash", line_color="#ff9800", annotation_text="FIB 0.5")
     fig.add_hline(y=fibs['fib_382'], line_dash="dash", line_color="#ff5722", annotation_text="FIB 0.382")
+
+    # Add TP levels as horizontal lines
+    fig.add_hline(y=last['tp1'], line_dash="dot", line_color="#00e676", annotation_text=f"TP1 ({tp1_r}R)")
+    fig.add_hline(y=last['tp2'], line_dash="dot", line_color="#ffd740", annotation_text=f"TP2 ({tp2_r}R)")
+    fig.add_hline(y=last['tp3'], line_dash="dot", line_color="#ff5722", annotation_text=f"TP3 ({tp3_r}R)")
 
     buys = df[df['buy']]
     sells = df[df['sell']]
@@ -898,7 +1065,7 @@ Market Regime: {ai_analysis['market_regime']}
         """, unsafe_allow_html=True)
 
     # ----------------------------------------------------
-    # SIGNAL VALIDATION SUMMARY (New)
+    # SIGNAL VALIDATION SUMMARY
     # ----------------------------------------------------
     st.markdown("### ✅ SIGNAL VALIDATION CHECKLIST")
     
@@ -913,7 +1080,8 @@ Market Regime: {ai_analysis['market_regime']}
         "Volume Surge": last['rvol'] > 1.5,
         "Momentum Align": titan_sig == momentum_sig,
         "No Squeeze": not last['in_squeeze'],
-        "Timeframe Suitability": ai_analysis['timeframe_score'] >= 70
+        "Timeframe Suitability": ai_analysis['timeframe_score'] >= 70,
+        "Trailing Enabled": use_trailing
     }
     
     for item, passed in validation_items.items():
@@ -923,13 +1091,13 @@ Market Regime: {ai_analysis['market_regime']}
     
     # Overall Signal Grade
     pass_count = sum(validation_items.values())
-    if pass_count >= 4:
+    if pass_count >= 5:
         grade = "A+ (EXCELLENT)"
         grade_color = "#00e676"
-    elif pass_count >= 3:
+    elif pass_count >= 4:
         grade = "B+ (GOOD)"
         grade_color = "#ffd740"
-    elif pass_count >= 2:
+    elif pass_count >= 3:
         grade = "C (MEDIUM)"
         grade_color = "#ff9800"
     else:
@@ -939,7 +1107,7 @@ Market Regime: {ai_analysis['market_regime']}
     st.markdown(f"""
     <div class="ai-card" style="text-align:center; border: 2px solid {grade_color};">
         <div style="font-size:24px; color:{grade_color};"><strong>SIGNAL GRADE: {grade}</strong></div>
-        <div style="font-size:14px;">{pass_count}/5 Validation Checks Passed</div>
+        <div style="font-size:14px;">{pass_count}/6 Validation Checks Passed</div>
     </div>
     """, unsafe_allow_html=True)
     
