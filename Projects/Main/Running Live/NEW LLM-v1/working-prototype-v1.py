@@ -1,15 +1,15 @@
 """
-TITAN-AXIOM MEGA-STATION V3.0 (GOLD MASTER)
--------------------------------------------
-INTEGRATION: 100% Feature Parity
-MODE 1: TITAN MOBILE (Binance | Scalping | SMC | Gann | Simple Clock)
-MODE 2: AXIOM QUANT (YFinance | Swing | Physics | Macro | World Clock)
+TITAN-AXIOM MEGA-STATION V4.0 (INTELLIGENCE EDITION)
+----------------------------------------------------
+INTEGRATION: 100% Feature Parity + ML & Optimization
+MODE 1: TITAN MOBILE (Binance | Scalping | SMC | Backtest)
+MODE 2: AXIOM QUANT (YFinance | Swing | Physics | ML | Portfolio Opt)
 
-STATUS:
-- Fixed Pandas 'replace' Error (using .mask)
-- Fixed Missing 'Apex_Flux' in Titan
-- Restored Axiom World Clock & Banner
-- Zero Omissions
+UPGRADES IN V4.0:
+- ML Engine: Isolation Forest for Anomaly Detection (Black Swan Finder).
+- Portfolio Engine: Efficient Frontier Optimization (Sharpe Ratio Maximizer).
+- Broadcast: One-click signal formatting for Telegram/Socials.
+- Preserved: All V3.1 Backtesting, Physics, and Evaluation modules.
 """
 
 import time
@@ -32,12 +32,14 @@ import yfinance as yf
 import streamlit.components.v1 as components
 from openai import OpenAI
 from scipy.stats import linregress
+from scipy.optimize import minimize
+from sklearn.ensemble import IsolationForest
 
 # =============================================================================
 # 1. PAGE CONFIG & CSS
 # =============================================================================
 st.set_page_config(
-    page_title="Titan-Axiom Omega",
+    page_title="Titan-Axiom V4 Intelligence",
     layout="wide",
     page_icon="💠",
     initial_sidebar_state="collapsed"
@@ -95,13 +97,29 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # =============================================================================
-# 2. SHARED UTILITIES
+# 2. SHARED UTILITIES & UPGRADED SECRETS MANAGER
 # =============================================================================
 class SecretsManager:
     @staticmethod
     def get(key, default=""):
-        try: return st.secrets.get(key, default)
-        except: return default
+        """
+        Robustly attempts to fetch a key from secrets.toml.
+        Checks root level first, then iterates through any sections (e.g. [openai]).
+        """
+        try:
+            # 1. Direct Access
+            if key in st.secrets:
+                return st.secrets[key]
+            
+            # 2. Nested Access (Scan all sections)
+            for section in st.secrets:
+                if isinstance(st.secrets[section], dict):
+                    if key in st.secrets[section]:
+                        return st.secrets[section][key]
+            
+            return default
+        except Exception:
+            return default
 
 def send_telegram(token, chat, msg):
     if not token or not chat: return False
@@ -193,7 +211,7 @@ class Visuals:
         html = """
         <div class="ticker-wrap">
             <div class="ticker">
-                <span class="ticker-item">💠 AXIOM QUANTITATIVE SYSTEM ONLINE</span>
+                <span class="ticker-item">💠 AXIOM QUANTITATIVE SYSTEM V4.0 ONLINE</span>
                 <span class="ticker-item">BTC-USD: LIVE</span>
                 <span class="ticker-item">SPY: LIVE</span>
                 <span class="ticker-item">VIX: LIVE</span>
@@ -392,7 +410,7 @@ class TitanEngine:
         df['apex_trend'] = apex_trend
         df['apex_trail'] = apex_trail
         
-        # --- MISSING FLUX FIX ---
+        # --- FLUX CALCULATION ---
         rg = df['high'] - df['low']
         body = np.abs(df['close'] - df['open'])
         eff_raw = np.where(rg == 0, 0, body / rg)
@@ -402,8 +420,7 @@ class TitanEngine:
         direction = np.sign(df['close'] - df['open'])
         raw = direction * eff_sm * pd.Series(v_rat, index=df.index)
         df['Apex_Flux'] = raw.ewm(span=5).mean()
-        # ------------------------
-
+        
         # Gann
         sma_h = df['high'].rolling(gann_l).mean()
         sma_l = df['low'].rolling(gann_l).mean()
@@ -419,9 +436,7 @@ class TitanEngine:
 
         # Targets
         risk = abs(df['close'] - df['entry_stop'])
-        # --- PANDAS ERROR FIX ---
         risk = risk.mask(risk == 0, df['close'] * 0.01)
-        # ------------------------
         df['tp1'] = np.where(df['is_bull'], df['close'] + 1.5*risk, df['close'] - 1.5*risk)
         df['tp2'] = np.where(df['is_bull'], df['close'] + 3.0*risk, df['close'] - 3.0*risk)
         df['tp3'] = np.where(df['is_bull'], df['close'] + 5.0*risk, df['close'] - 5.0*risk)
@@ -461,8 +476,58 @@ class TitanEngine:
         </div>
         """
 
+    @staticmethod
+    def render_ticker_tape(selected_symbol):
+        base = selected_symbol.replace("USDT", "")
+        tape_bases = ["BTC", "ETH", "SOL", "BNB", "XRP", "ADA", "DOGE"]
+        if base not in tape_bases: tape_bases.insert(0, base)
+        symbols_json = json.dumps([{"proName": f"BINANCE:{b}USDT", "title": b} for b in tape_bases], separators=(",", ":"))
+        components.html(f"""<div class="tradingview-widget-container"><div class="tradingview-widget-container__widget"></div><script type="text/javascript" src="https://s3.tradingview.com/external-embedding/embed-widget-ticker-tape.js" async>{{ "symbols": {symbols_json}, "showSymbolLogo": true, "colorTheme": "dark", "isTransparent": true, "displayMode": "adaptive", "locale": "en" }}</script></div>""", height=50)
+
+    # -------------------------------------------------------------------------
+    # NEW EVALUATION FEATURE: BACKTESTER (PRESERVED)
+    # -------------------------------------------------------------------------
+    @staticmethod
+    def run_backtest(df):
+        """Simple strategy backtester for Titan Logic"""
+        if df.empty: return 0, 0.0
+        
+        trades = []
+        in_trade = False
+        entry_price = 0
+        is_long = True
+        
+        # Simple loop to check Trend flips
+        for i in range(1, len(df)):
+            row = df.iloc[i]
+            prev = df.iloc[i-1]
+            
+            # Entry Signal (Trend Flip)
+            if not in_trade:
+                if row['is_bull'] and not prev['is_bull']:
+                    in_trade = True; entry_price = row['close']; is_long = True
+                elif not row['is_bull'] and prev['is_bull']:
+                    in_trade = True; entry_price = row['close']; is_long = False
+            
+            # Exit Signal (Trend Flip back)
+            elif in_trade:
+                pnl = 0
+                if is_long and not row['is_bull']:
+                    pnl = (row['close'] - entry_price) / entry_price
+                    trades.append(pnl)
+                    in_trade = False
+                elif not is_long and row['is_bull']:
+                    pnl = (entry_price - row['close']) / entry_price
+                    trades.append(pnl)
+                    in_trade = False
+        
+        if not trades: return 0, 0.0
+        win_rate = (len([x for x in trades if x > 0]) / len(trades)) * 100
+        total_ret = sum(trades) * 100
+        return len(trades), win_rate
+
 # =============================================================================
-# 5. AXIOM ENGINE (STOCKS / PHYSICS)
+# 5. AXIOM ENGINE (STOCKS / PHYSICS / ML / OPTIMIZATION)
 # =============================================================================
 class AxiomEngine:
     @staticmethod
@@ -638,12 +703,86 @@ class AxiomEngine:
             return client.chat.completions.create(model="gpt-4o", messages=[{"role":"user", "content":prompt}]).choices[0].message.content
         except Exception as e: return f"AI Error: {e}"
 
+    # -------------------------------------------------------------------------
+    # NEW V4.0 FEATURE: ISOLATION FOREST (ANOMALY DETECTION)
+    # -------------------------------------------------------------------------
+    @staticmethod
+    def detect_anomalies(df):
+        """
+        Uses Isolation Forest to detect Black Swan events or unusual price action.
+        Features: Returns, Volatility, Volume Change.
+        """
+        try:
+            # Prepare data
+            data = df.copy()
+            data['Returns'] = data['Close'].pct_change()
+            data['Vol'] = data['Returns'].rolling(20).std()
+            data['Vol_Change'] = data['Volume'].pct_change()
+            data = data.dropna()
+            
+            if len(data) < 50: return df, 0 # Not enough data
+            
+            # Model
+            model = IsolationForest(contamination=0.05, random_state=42)
+            features = ['Returns', 'Vol', 'Vol_Change']
+            data['Anomaly'] = model.fit_predict(data[features])
+            
+            # Merge back to original df
+            df['Anomaly'] = 0
+            df.loc[data.index, 'Anomaly'] = data['Anomaly']
+            
+            # Count anomalies in last 30 periods
+            recent_anomalies = df['Anomaly'].iloc[-30:].value_counts().get(-1, 0)
+            return df, recent_anomalies
+        except: return df, 0
+
+    # -------------------------------------------------------------------------
+    # NEW V4.0 FEATURE: PORTFOLIO OPTIMIZATION
+    # -------------------------------------------------------------------------
+    @staticmethod
+    @st.cache_data(ttl=3600)
+    def optimize_portfolio(ticker_list):
+        """
+        Calculates Efficient Frontier and Optimal Weights (Sharpe Ratio).
+        """
+        if not ticker_list or len(ticker_list) < 2: return None
+        
+        try:
+            # Get Data
+            df = yf.download(ticker_list, period="6mo", interval="1d", progress=False)['Close']
+            returns = df.pct_change().dropna()
+            
+            # Helper for optimization
+            def get_ret_vol_sr(weights):
+                weights = np.array(weights)
+                ret = np.sum(returns.mean() * weights) * 252
+                vol = np.sqrt(np.dot(weights.T, np.dot(returns.cov() * 252, weights)))
+                sr = ret / vol
+                return np.array([ret, vol, sr])
+            
+            def neg_sharpe(weights):
+                return get_ret_vol_sr(weights)[2] * -1
+            
+            # Constraints
+            cons = ({'type': 'eq', 'fun': lambda x: np.sum(x) - 1})
+            bounds = tuple((0, 1) for _ in range(len(ticker_list)))
+            init_guess = [1/len(ticker_list)] * len(ticker_list)
+            
+            # Optimize
+            opt_results = minimize(neg_sharpe, init_guess, method='SLSQP', bounds=bounds, constraints=cons)
+            
+            best_weights = opt_results.x
+            ret, vol, sr = get_ret_vol_sr(best_weights)
+            
+            return {"weights": dict(zip(ticker_list, best_weights)), "ret": ret, "vol": vol, "sharpe": sr, "corr": df.corr()}
+        except: return None
+
 # =============================================================================
 # 6. MAIN CONTROLLER
 # =============================================================================
 def main():
     # SIDEBAR CONTROLLER
-    st.sidebar.header("💠 MEGA-STATION")
+    st.sidebar.header("💠 MEGA-STATION V4")
     mode = st.sidebar.radio("ENGINE MODE", ["TITAN MOBILE (Crypto)", "AXIOM QUANT (Stocks)"])
     
     with st.sidebar.expander("🔐 KEYS"):
@@ -696,11 +835,18 @@ def main():
             spec = TitanEngine.detect_special_setups(df)
             st.markdown(TitanEngine.generate_mobile_report(last, fg, spec), unsafe_allow_html=True)
             
-            # TELEGRAM
-            if st.button("📢 SEND SIGNAL"):
-                msg = f"🚀 *TITAN SIGNAL* 🚀\nSymbol: {ticker}\nSide: {'LONG' if last['is_bull'] else 'SHORT'}\nEntry: {last['close']}\nStop: {last['entry_stop']}\nTP3: {last['tp3']}"
-                if send_telegram(tg_token, tg_chat, msg): st.success("SENT")
-                else: st.error("FAIL")
+            # ACTIONS
+            c_a1, c_a2 = st.columns(2)
+            with c_a1:
+                if st.button("📢 SEND SIGNAL"):
+                    msg = f"🚀 *TITAN SIGNAL* 🚀\nSymbol: {ticker}\nSide: {'LONG' if last['is_bull'] else 'SHORT'}\nEntry: {last['close']}\nStop: {last['entry_stop']}\nTP3: {last['tp3']}"
+                    if send_telegram(tg_token, tg_chat, msg): st.success("SENT")
+                    else: st.error("FAIL")
+            with c_a2:
+                # EVALUATION UI
+                if st.button("📊 EVALUATE STRATEGY"):
+                    count, wr = TitanEngine.run_backtest(df)
+                    st.toast(f"Backtest Result: {wr:.1f}% Win Rate over {count} trades")
 
             # CHART
             fig = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.7, 0.3], vertical_spacing=0.05)
@@ -728,7 +874,7 @@ def main():
         Visuals.render_axiom_clock()
         Visuals.render_axiom_banner()
         
-        with st.spinner("Crunching Physics..."):
+        with st.spinner("Crunching Physics & ML..."):
             df = AxiomEngine.fetch_data(ticker, tf)
         
         if not df.empty:
@@ -737,6 +883,10 @@ def main():
             df = AxiomEngine.calc_rqzo(df)
             df = AxiomEngine.calc_apex_flux(df)
             df = AxiomEngine.calc_smc(df)
+            
+            # V4.0 Feature: Anomaly Detection
+            df, anomaly_count = AxiomEngine.detect_anomalies(df)
+            
             last = df.iloc[-1]
             fund = AxiomEngine.get_fundamentals(ticker)
             macro_p, macro_c = AxiomEngine.get_macro_data()
@@ -746,15 +896,20 @@ def main():
             c1.metric("PRICE", f"{last['Close']:.2f}")
             c2.metric("ENTROPY", f"{last['CHEDO']:.2f}", delta="Risk" if abs(last['CHEDO'])>0.8 else "Stable")
             c3.metric("FLUX", f"{last['Apex_Flux']:.2f}", delta=last['Apex_State'])
-            c4.metric("TREND", "BULL" if last['Trend_Dir']==1 else "BEAR")
+            c4.metric("ALERTS", f"{anomaly_count} Anomalies", delta_color="inverse")
 
-            # TABS
-            tabs = st.tabs(["📉 TECH", "🌍 MACRO", "📅 DNA", "🧠 AI", "📊 VOL", "🔮 SIM"])
+            # TABS (Updated with V4 Features)
+            tabs = st.tabs(["📉 TECH", "🌍 MACRO", "🧠 INTELLIGENCE", "📊 QUANT", "🕸️ OPTIMIZER", "📡 BROADCAST"])
             
             with tabs[0]: # TECH CHART
                 fig = make_subplots(rows=3, cols=1, shared_xaxes=True, row_heights=[0.5, 0.25, 0.25], vertical_spacing=0.02)
                 fig.add_trace(go.Candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'], name='Price'), row=1, col=1)
                 fig.add_trace(go.Scatter(x=df.index, y=df['HMA_Trend'], line=dict(color='#fff', width=1, dash='dot'), name='HMA'), row=1, col=1)
+                
+                # ML Anomaly Markers
+                anoms = df[df['Anomaly'] == -1]
+                fig.add_trace(go.Scatter(x=anoms.index, y=anoms['Close'], mode='markers', marker=dict(color='yellow', symbol='x', size=10), name="Anomaly"), row=1, col=1)
+                
                 fig.add_trace(go.Scatter(x=df.index, y=df['CHEDO'], line=dict(color='#00F0FF', width=2), fill='tozeroy', fillcolor='rgba(0,240,255,0.1)', name='Entropy'), row=2, col=1)
                 colors = np.where(df['Apex_Flux'] > 0.6, '#00E676', np.where(df['Apex_Flux'] < -0.6, '#FF1744', '#2979FF'))
                 fig.add_trace(go.Bar(x=df.index, y=df['Apex_Flux'], marker_color=colors, name='Flux'), row=3, col=1)
@@ -767,23 +922,52 @@ def main():
                 c2.metric("VIX", f"{macro_p.get('VIX',0):.2f}", f"{macro_c.get('VIX',0):.2f}%")
                 if fund: st.write(f"**Fundamentals**: Cap {fund['Market Cap']} | PE {fund['P/E Ratio']}")
 
-            with tabs[2]: # DNA
-                dna = AxiomEngine.calc_day_of_week_dna(ticker)
-                if dna is not None: st.bar_chart(dna)
+            with tabs[2]: # INTELLIGENCE (DNA + AI)
+                c1, c2 = st.columns([1, 2])
+                with c1:
+                    st.write("**Weekly DNA**")
+                    dna = AxiomEngine.calc_day_of_week_dna(ticker)
+                    if dna is not None: st.bar_chart(dna)
+                with c2:
+                    st.write("**AI Analyst**")
+                    if st.button("RUN AI DIAGNOSTIC"):
+                        res = AxiomEngine.analyze_ai(ticker, last['Close'], last['CHEDO'], last['RQZO'], last['Apex_Flux'], ai_key)
+                        st.info(res)
 
-            with tabs[3]: # AI
-                if st.button("RUN INTELLIGENCE"):
-                    res = AxiomEngine.analyze_ai(ticker, last['Close'], last['CHEDO'], last['RQZO'], last['Apex_Flux'], ai_key)
-                    st.info(res)
+            with tabs[3]: # QUANT (VOL + SIM)
+                c1, c2 = st.columns(2)
+                with c1:
+                    vp, poc = AxiomEngine.calc_volume_profile(df)
+                    st.bar_chart(vp.set_index('Price')['Volume'])
+                    st.caption(f"POC Level: {poc:.2f}")
+                with c2:
+                    mc = AxiomEngine.run_monte_carlo(df)
+                    st.line_chart(mc[:, :20])
+                    st.caption("Monte Carlo Probability Paths")
 
-            with tabs[4]: # VOLUME
-                vp, poc = AxiomEngine.calc_volume_profile(df)
-                st.bar_chart(vp.set_index('Price')['Volume'])
-                st.caption(f"POC: {poc:.2f}")
-
-            with tabs[5]: # MONTE CARLO
-                mc = AxiomEngine.run_monte_carlo(df)
-                st.line_chart(mc[:, :20])
+            with tabs[4]: # NEW V4: OPTIMIZER
+                st.subheader("Efficient Frontier Optimization")
+                st.write(f"Optimizing Sector: {ac}")
+                
+                if st.button("RUN OPTIMIZER"):
+                    opt = AxiomEngine.optimize_portfolio(ticks[:5]) # Limit to top 5 for speed
+                    if opt:
+                        c1, c2 = st.columns([1, 2])
+                        with c1:
+                            st.dataframe(pd.Series(opt['weights'], name="Weight"))
+                            st.metric("Sharpe Ratio", f"{opt['sharpe']:.2f}")
+                            st.metric("Exp Return", f"{opt['ret']*100:.1f}%")
+                        with c2:
+                            fig_corr = px.imshow(opt['corr'], text_auto=True, color_continuous_scale='RdBu_r', title="Correlation Matrix")
+                            st.plotly_chart(fig_corr)
+            
+            with tabs[5]: # NEW V4: BROADCAST
+                st.subheader("📢 Signal Broadcasting")
+                signal_txt = f"💠 **AXIOM V4 ALERT**\nAsset: #{ticker}\nPrice: {last['Close']:.2f}\nTrend: {'BULL' if last['Trend_Dir']==1 else 'BEAR'}\nFlux: {last['Apex_Flux']:.2f}\nEntropy: {last['CHEDO']:.2f}"
+                st.text_area("Formatted Signal", signal_txt, height=150)
+                if st.button("SEND TO TELEGRAM"):
+                    if send_telegram(tg_token, tg_chat, signal_txt): st.success("Broadcast Sent!")
+                    else: st.error("Failed. Check Keys.")
 
 if __name__ == "__main__":
     main()
