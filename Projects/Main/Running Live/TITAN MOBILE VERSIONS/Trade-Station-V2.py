@@ -701,6 +701,217 @@ def main():
                 msg = f"🚀 *TITAN SIGNAL* 🚀\nSymbol: {ticker}\nSide: {'LONG' if last['is_bull'] else 'SHORT'}\nEntry: {last['close']}\nStop: {last['entry_stop']}\nTP3: {last['tp3']}"
                 if send_telegram(tg_token, tg_chat, msg): st.success("SENT")
                 else: st.error("FAIL")
+# --- MOBILE OPTIMIZED REPORT GENERATOR ---
+# Uses HTML/CSS Cards instead of Wide Tables
+def generate_mobile_report(row, symbol, tf, fibs, fg_index, smart_stop):
+    is_bull = row['is_bull']
+    direction = "LONG 🐂" if is_bull else "SHORT 🐻"
+
+    # Logic
+    titan_sig = 1 if row['is_bull'] else -1
+    apex_sig = row['apex_trend']
+    gann_sig = row['gann_trend']
+
+    score_val = 0
+    if titan_sig == apex_sig: score_val += 1
+    if titan_sig == gann_sig: score_val += 1
+
+    confidence = "LOW"
+    if score_val == 2: confidence = "MAX 🔥"
+    elif score_val == 1: confidence = "HIGH"
+
+    vol_desc = "Normal"
+    if row['rvol'] > 2.0: vol_desc = "IGNITION 🚀"
+
+    squeeze_txt = "⚠️ SQUEEZE ACTIVE" if row['in_squeeze'] else "⚪ NO SQUEEZE"
+
+    # HTML Card Construction
+    report_html = f"""
+    <div class="report-card">
+        <div class="report-header">💠 SIGNAL: {direction}</div>
+        <div class="report-item">Confidence: <span class="highlight">{confidence}</span></div>
+        <div class="report-item">Sentiment: <span class="highlight">{fg_index}/100</span></div>
+        <div class="report-item">Squeeze: <span class="highlight">{squeeze_txt}</span></div>
+    </div>
+
+    <div class="report-card">
+        <div class="report-header">🌊 FLOW & VOL</div>
+        <div class="report-item">RVOL: <span class="highlight">{row['rvol']:.2f} ({vol_desc})</span></div>
+        <div class="report-item">Money Flow: <span class="highlight">{row['money_flow']:.2f}</span></div>
+        <div class="report-item">VWAP Relation: <span class="highlight">{'Above' if row['close'] > row['vwap'] else 'Below'}</span></div>
+    </div>
+
+    <div class="report-card">
+        <div class="report-header">🎯 EXECUTION PLAN</div>
+        <div class="report-item">Entry: <span class="highlight">{row['close']:.4f}</span></div>
+        <div class="report-item">🛑 SMART STOP: <span class="highlight">{smart_stop:.4f}</span></div>
+        <div class="report-item">1️⃣ TP1 (1.5R): <span class="highlight">{row['tp1']:.4f}</span></div>
+        <div class="report-item">2️⃣ TP2 (3.0R): <span class="highlight">{row['tp2']:.4f}</span></div>
+        <div class="report-item">3️⃣ TP3 (5.0R): <span class="highlight">{row['tp3']:.4f}</span></div>
+    </div>
+    """
+    return report_html
+
+def send_telegram_msg(token, chat, msg):
+    if not token or not chat:
+        return False
+    try:
+        r = requests.post(
+            f"https://api.telegram.org/bot{token}/sendMessage",
+            json={"chat_id": chat, "text": msg, "parse_mode": "Markdown"},
+            timeout=5
+        )
+        return r.status_code == 200
+    except:
+        return False
+
+@st.cache_data(ttl=5)
+def get_klines(symbol_bin, interval, limit):
+    try:
+        r = requests.get(
+            f"{BINANCE_API_BASE}/klines",
+            params={"symbol": symbol_bin, "interval": interval, "limit": limit},
+            headers=HEADERS,
+            timeout=4
+        )
+        if r.status_code == 200:
+            df = pd.DataFrame(r.json(), columns=['t','o','h','l','c','v','T','q','n','V','Q','B'])
+            df['timestamp'] = pd.to_datetime(df['t'], unit='ms')
+            df[['open','high','low','close','volume']] = df[['o','h','l','c','v']].astype(float)
+            return df[['timestamp','open','high','low','close','volume']]
+    except:
+        pass
+    return pd.DataFrame()
+
+def run_engines(df, amp, dev, hma_l, tp1, tp2, tp3, mf_l, vol_l, gann_l):
+    if df.empty:
+        return df
+    df = df.copy().reset_index(drop=True)
+
+    # Indicators
+    df['tr'] = np.maximum(
+        df['high']-df['low'],
+        np.maximum(abs(df['high']-df['close'].shift(1)), abs(df['low']-df['close'].shift(1)))
+    )
+    df['atr'] = df['tr'].ewm(alpha=1/14, adjust=False).mean()
+    df['hma'] = calculate_hma(df['close'], hma_l)
+
+    # VWAP
+    df['tp'] = (df['high'] + df['low'] + df['close']) / 3
+    df['vol_tp'] = df['tp'] * df['volume']
+    df['vwap'] = df['vol_tp'].cumsum() / df['volume'].cumsum()
+
+    # Squeeze
+    bb_basis = df['close'].rolling(20).mean()
+    bb_dev = df['close'].rolling(20).std() * 2.0
+    kc_basis = df['close'].rolling(20).mean()
+    kc_dev = df['atr'] * 1.5
+    df['in_squeeze'] = ((bb_basis - bb_dev) > (kc_basis - kc_dev)) & ((bb_basis + bb_dev) < (kc_basis + kc_dev))
+
+    # Momentum
+    delta = df['close'].diff()
+    gain = delta.clip(lower=0).ewm(alpha=1/14).mean()
+    loss = -delta.clip(upper=0).ewm(alpha=1/14).mean()
+    df['rsi'] = 100 - (100 / (1 + (gain/loss)))
+    df['rvol'] = df['volume'] / df['volume'].rolling(vol_l).mean()
+
+    # Money Flow
+    rsi_source = df['rsi'] - 50
+    vol_sma = df['volume'].rolling(mf_l).mean()
+    df['money_flow'] = (rsi_source * (df['volume'] / vol_sma)).ewm(span=3).mean()
+
+    pc = df['close'].diff()
+    ds_pc = pc.ewm(span=25).mean().ewm(span=13).mean()
+    ds_abs_pc = abs(pc).ewm(span=25).mean().ewm(span=13).mean()
+    df['hyper_wave'] = (100 * (ds_pc / ds_abs_pc)) / 2
+
+    # Titan Trend
+    df['ll'] = df['low'].rolling(amp).min()
+    df['hh'] = df['high'].rolling(amp).max()
+    trend = np.zeros(len(df))
+    stop = np.full(len(df), np.nan)
+    curr_t = 0
+    curr_s = np.nan
+    for i in range(amp, len(df)):
+        c = df.at[i,'close']
+        d = df.at[i,'atr']*dev
+        if curr_t == 0:
+            s = df.at[i,'ll'] + d
+            curr_s = max(curr_s, s) if not np.isnan(curr_s) else s
+            if c < curr_s:
+                curr_t = 1
+                curr_s = df.at[i,'hh'] - d
+        else:
+            s = df.at[i,'hh'] - d
+            curr_s = min(curr_s, s) if not np.isnan(curr_s) else s
+            if c > curr_s:
+                curr_t = 0
+                curr_s = df.at[i,'ll'] + d
+        trend[i] = curr_t
+        stop[i] = curr_s
+
+    df['is_bull'] = trend == 0
+    df['entry_stop'] = stop
+
+    # Signals
+    cond_buy = (df['is_bull']) & (~df['is_bull'].shift(1).fillna(False)) & (df['rvol']>1.0)
+    cond_sell = (~df['is_bull']) & (df['is_bull'].shift(1).fillna(True)) & (df['rvol']>1.0)
+    df['buy'] = cond_buy
+    df['sell'] = cond_sell
+
+    # Targets
+    df['sig_id'] = (df['buy']|df['sell']).cumsum()
+    df['entry'] = df.groupby('sig_id')['close'].ffill()
+    df['stop_val'] = df.groupby('sig_id')['entry_stop'].ffill()
+    risk = abs(df['entry'] - df['stop_val'])
+    df['tp1'] = np.where(df['is_bull'], df['entry']+(risk*tp1), df['entry']-(risk*tp1))
+    df['tp2'] = np.where(df['is_bull'], df['entry']+(risk*tp2), df['entry']-(risk*tp2))
+    df['tp3'] = np.where(df['is_bull'], df['entry']+(risk*tp3), df['entry']-(risk*tp3))
+
+    # Apex & Gann
+    apex_base = calculate_hma(df['close'], 55)
+    apex_atr = df['atr'] * 1.5
+    df['apex_upper'] = apex_base + apex_atr
+    df['apex_lower'] = apex_base - apex_atr
+    apex_t = np.zeros(len(df))
+    for i in range(1, len(df)):
+        if df.at[i, 'close'] > df.at[i, 'apex_upper']:
+            apex_t[i] = 1
+        elif df.at[i, 'close'] < df.at[i, 'apex_lower']:
+            apex_t[i] = -1
+        else:
+            apex_t[i] = apex_t[i-1]
+    df['apex_trend'] = apex_t
+
+    sma_h = df['high'].rolling(gann_l).mean()
+    sma_l = df['low'].rolling(gann_l).mean()
+    g_trend = np.full(len(df), np.nan)
+    g_act = np.full(len(df), np.nan)
+    curr_g_t = 1
+    curr_g_a = sma_l.iloc[gann_l] if len(sma_l) > gann_l else np.nan
+    for i in range(gann_l, len(df)):
+        c = df.at[i,'close']
+        h_ma = sma_h.iloc[i]
+        l_ma = sma_l.iloc[i]
+        prev_a = g_act[i-1] if (i>0 and not np.isnan(g_act[i-1])) else curr_g_a
+        if curr_g_t == 1:
+            if c < prev_a:
+                curr_g_t = -1
+                curr_g_a = h_ma
+            else:
+                curr_g_a = l_ma
+        else:
+            if c > prev_a:
+                curr_g_t = 1
+                curr_g_a = l_ma
+            else:
+                curr_g_a = h_ma
+        g_trend[i] = curr_g_t
+        g_act[i] = curr_g_a
+    df['gann_trend'] = g_trend
+    df['gann_act'] = g_act
+
+    return df
 
             # CHART
             fig = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.7, 0.3], vertical_spacing=0.05)
