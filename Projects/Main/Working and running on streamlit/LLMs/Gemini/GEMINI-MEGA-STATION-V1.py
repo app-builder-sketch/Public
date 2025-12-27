@@ -141,7 +141,6 @@ class SecretsManager:
     @staticmethod
     def get(key, default=""):
         try:
-            # Check Streamlit secrets first, then fall back
             if key in st.secrets: return st.secrets[key]
             return default
         except: return default
@@ -178,6 +177,7 @@ class WhaleTracker:
             if len(st.session_state.whale_data) > 30: st.session_state.whale_data.pop(0)
 
     def start(self):
+        # NOTE: websocket.WebSocketApp comes from the websocket-client library
         self.ws = websocket.WebSocketApp(self.ws_url, on_message=self.on_message)
         self.thread = threading.Thread(target=self.ws.run_forever, daemon=True)
         self.thread.start()
@@ -231,7 +231,7 @@ class TitanEngine:
         df['atr'] = df['tr'].ewm(alpha=1/14, adjust=False).mean()
         df['hma'] = TitanEngine.get_ma(df['close'], hma_l, "HMA")
         
-        # Volumetrics (From Code 2)
+        # Volumetrics
         df = TitanEngine.calc_volumetric_delta(df)
         
         # Momentum & Flow
@@ -268,8 +268,7 @@ class TitanEngine:
         eff = np.where(rg == 0, 0, body / rg)
         df['Apex_Flux'] = (pd.Series(eff).ewm(span=14).mean() * np.sign(df['close']-df['open'])).ewm(span=5).mean()
         
-        # SuperTrend Component (Code 2 Score integration)
-        st_v, st_dir = 10, 1 # Placeholder for parity
+        # GM Score
         df['GM_Score'] = np.where(df['is_bull'], 1, -1) + np.where(df['rsi']>50,1,-1) + np.sign(df['Apex_Flux'])
         
         # SMC Zones
@@ -379,9 +378,6 @@ def main():
     tg_token = SecretsManager.get("TELEGRAM_TOKEN")
     tg_chat = SecretsManager.get("TELEGRAM_CHAT_ID")
 
-    # -------------------------------------------------------------------------
-    # MODE 1: TITAN (Crypto Threading + WebSockets)
-    # -------------------------------------------------------------------------
     if mode == "TITAN (Binance/Crypto)":
         ticker_base = st.sidebar.selectbox("Asset", ["BTC", "ETH", "SOL", "BNB", "XRP"])
         ticker = f"{ticker_base}USDT"
@@ -427,9 +423,6 @@ def main():
                         requests.post(f"https://api.telegram.org/bot{tg_token}/sendMessage", data={"chat_id":tg_chat, "text":msg})
                         st.success("Broadcasted")
 
-    # -------------------------------------------------------------------------
-    # MODE 2: AXIOM (Physics / Quant)
-    # -------------------------------------------------------------------------
     else:
         ticker = st.sidebar.text_input("Ticker (YFinance)", value="NVDA")
         tf = st.sidebar.selectbox("TF", ["1h", "4h", "1d", "1wk"], index=2)
