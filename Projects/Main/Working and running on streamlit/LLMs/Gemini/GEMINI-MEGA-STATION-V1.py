@@ -1,16 +1,14 @@
 """
-OMNI-SENTIENT TERMINAL V4.0 (TITAN-AXIOM)
+OMNI-SENTIENT TERMINAL V4.1 (TITAN-AXIOM)
 -----------------------------------------
-INTEGRATION: 100% Feature Parity + Axiom Signaling Upgrade
+INTEGRATION: 100% Feature Parity + HTML Rendering Fix
 MODE 1: TITAN MOBILE (Binance | Scalping | SMC | Gann)
 MODE 2: AXIOM QUANT (YFinance | Swing | Physics | Macro)
 
 STATUS:
-- REBRAND: Upgraded to "Omni-Sentient V4.0".
-- NEW FEATURE: Axiom Mode now generates buy/sell signals.
-- NEW FEATURE: Axiom Broadcast (Telegram) enabled.
-- NEW FEATURE: "Deep Context" reports explaining Entropy/Flux/Relativity.
-- PRESERVATION: Zero omissions from V3.4.
+- BUG FIX: Corrected indentation in Axiom Report HTML to prevent raw code rendering.
+- FEATURE: All V4.0 features (Signals, Broadcast, Explanations) preserved.
+- UI: "Physics Metrics" now render cleanly as styled cards.
 """
 
 # =============================================================================
@@ -88,7 +86,7 @@ from scipy.stats import linregress
 # 1. PAGE CONFIG & CSS
 # =============================================================================
 st.set_page_config(
-    page_title="Omni-Sentient Terminal V4",
+    page_title="Omni-Sentient Terminal V4.1",
     layout="wide",
     page_icon="💠",
     initial_sidebar_state="collapsed"
@@ -799,26 +797,24 @@ class AxiomEngine:
         flux_desc = row['Apex_State']
         flux_expl = "Volume-weighted momentum. Positive values indicate buying pressure."
 
+        # FIXED: Removed indentation in f-string to prevent Markdown code block rendering error
         return f"""
-        <div class="report-card" style="border-left: 4px solid #38bdf8;">
-            <div class="report-header">💠 AXIOM SIGNAL: {signal}</div>
-            <div class="report-item">Asset: <span class="value-cyan">{ticker}</span></div>
-            <div class="report-item">Price: <span class="value-cyan">{row['Close']:.2f}</span></div>
-            <div class="report-item">Trend State: <span class="value-cyan">{'Bullish' if trend_bullish else 'Bearish'}</span></div>
-        </div>
-
-        <div class="report-card" style="border-left: 4px solid #D500F9;">
-            <div class="report-header">🧬 PHYSICS METRICS</div>
-            <div class="report-item">Entropy (CHEDO): <span class="value-cyan">{chedo_val:.2f} ({chedo_desc})</span></div>
-            <div class="report-context">{chedo_expl}</div>
-            
-            <div class="report-item" style="margin-top:10px;">Flux State: <span class="value-cyan">{flux_val:.2f} ({flux_desc})</span></div>
-            <div class="report-context">{flux_expl}</div>
-            
-            <div class="report-item" style="margin-top:10px;">Relativity (RQZO): <span class="value-cyan">{row['RQZO']:.2f}</span></div>
-            <div class="report-context">Measures price deviation from harmonic norms. Zero is mean reversion.</div>
-        </div>
-        """
+<div class="report-card" style="border-left: 4px solid #38bdf8;">
+    <div class="report-header">💠 AXIOM SIGNAL: {signal}</div>
+    <div class="report-item">Asset: <span class="value-cyan">{ticker}</span></div>
+    <div class="report-item">Price: <span class="value-cyan">{row['Close']:.2f}</span></div>
+    <div class="report-item">Trend State: <span class="value-cyan">{'Bullish' if trend_bullish else 'Bearish'}</span></div>
+</div>
+<div class="report-card" style="border-left: 4px solid #D500F9;">
+    <div class="report-header">🧬 PHYSICS METRICS</div>
+    <div class="report-item">Entropy (CHEDO): <span class="value-cyan">{chedo_val:.2f} ({chedo_desc})</span></div>
+    <div class="report-context">{chedo_expl}</div>
+    <div class="report-item" style="margin-top:10px;">Flux State: <span class="value-cyan">{flux_val:.2f} ({flux_desc})</span></div>
+    <div class="report-context">{flux_expl}</div>
+    <div class="report-item" style="margin-top:10px;">Relativity (RQZO): <span class="value-cyan">{row['RQZO']:.2f}</span></div>
+    <div class="report-context">Measures price deviation from harmonic norms. Zero is mean reversion.</div>
+</div>
+"""
 
 # --- MOBILE OPTIMIZED REPORT GENERATOR (LEGACY/STANDALONE) ---
 # Uses HTML/CSS Cards instead of Wide Tables
