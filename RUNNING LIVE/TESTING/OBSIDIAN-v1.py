@@ -292,11 +292,36 @@ def telegram_dispatch(token, chat_id, message):
 # --- 5. MAIN APP INTERFACE ---
 
 def main():
-    # SESSION STATE
+    # SESSION STATE & SECRETS AUTO-LOADER
     if 'config' not in st.session_state:
         st.session_state.config = {"ticker": "BTC-USD", "interval": "1h", "live": False}
+    
     if 'tg_creds' not in st.session_state:
-        st.session_state.tg_creds = {"token": "", "chat": ""}
+        # Initialize with empty strings
+        token = ""
+        chat = ""
+        
+        # Safe Secrets Loading
+        try:
+            # Check for top-level keys first
+            if "TELEGRAM_TOKEN" in st.secrets:
+                token = st.secrets["TELEGRAM_TOKEN"]
+            elif "telegram" in st.secrets and "token" in st.secrets["telegram"]:
+                token = st.secrets["telegram"]["token"]
+                
+            if "TELEGRAM_CHAT_ID" in st.secrets:
+                chat = st.secrets["TELEGRAM_CHAT_ID"]
+            elif "telegram" in st.secrets and "chat_id" in st.secrets["telegram"]:
+                chat = st.secrets["telegram"]["chat_id"]
+                
+        except FileNotFoundError:
+            # Secrets file missing is okay, we just default to manual input
+            pass
+        except Exception:
+            # Catch other potential loading errors
+            pass
+            
+        st.session_state.tg_creds = {"token": token, "chat": chat}
 
     # SIDEBAR: COMMAND CENTER
     with st.sidebar:
@@ -313,8 +338,21 @@ def main():
         
         st.markdown("---")
         st.markdown("### 📡 UPLINK")
-        st.session_state.tg_creds['token'] = st.text_input("BOT TOKEN", type="password")
-        st.session_state.tg_creds['chat'] = st.text_input("CHAT ID")
+        
+        # Visual Indicator for Secrets
+        has_secrets = False
+        try:
+            if "TELEGRAM_TOKEN" in st.secrets: has_secrets = True
+        except: pass
+        
+        if has_secrets:
+            st.caption("🔒 SECRETS ACTIVE")
+        else:
+            st.caption("⚠️ MANUAL MODE")
+            
+        # These inputs will now pre-fill if secrets were found
+        st.session_state.tg_creds['token'] = st.text_input("BOT TOKEN", value=st.session_state.tg_creds['token'], type="password")
+        st.session_state.tg_creds['chat'] = st.text_input("CHAT ID", value=st.session_state.tg_creds['chat'])
         
         st.markdown("---")
         st.session_state.config['live'] = st.checkbox("🔴 LIVE SYNC (10s)", value=st.session_state.config['live'])
