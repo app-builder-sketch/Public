@@ -121,101 +121,132 @@ st.markdown("""
 class MarketDataEngine:
     @staticmethod
     def fetch_live(ticker, interval):
-        # Intelligent Period Selection to minimize data load while ensuring calculation depth
+        # Intelligent Period Selection
         period_map = {
             "1m": "2d", "5m": "5d", "15m": "10d", "30m": "1mo",
             "1h": "1mo", "4h": "3mo", "1d": "1y", "1wk": "2y"
         }
+        
         try:
-            df = yf.download(ticker, period=period_map.get(interval, "1mo"), interval=interval, progress=False)
-            if df.empty: return pd.DataFrame()
+            # FIX: Use Ticker().history() instead of download() for better stability
+            dat = yf.Ticker(ticker)
+            period = period_map.get(interval, "1mo")
+            df = dat.history(period=period, interval=interval)
+            
+            if df.empty:
+                # Fallback to download if history fails
+                df = yf.download(ticker, period=period, interval=interval, progress=False)
+
+            if df.empty:
+                st.error(f"Provider returned no data for {ticker}. API limit or Invalid Symbol.")
+                return pd.DataFrame()
+            
+            # Formatting: Lowercase columns
             df.columns = df.columns.str.lower()
+            
+            # FIX: Handle MultiIndex columns (Common yfinance issue in 2024/25)
+            # If columns look like ('close', 'BTC-USD'), flatten them
+            if isinstance(df.columns, pd.MultiIndex):
+                # Attempt to keep just the column name (level 0 or 1 depending on version)
+                try:
+                    df.columns = df.columns.get_level_values(0)
+                except:
+                    pass
+            
+            # Ensure index is datetime
+            if not isinstance(df.index, pd.DatetimeIndex):
+                df.index = pd.to_datetime(df.index)
+
+            # Clean timezone info to prevent plotting errors
+            if df.index.tz is not None:
+                df.index = df.index.tz_convert(None)
+
             return df
-        except:
+            
+        except Exception as e:
+            st.error(f"Data Pipeline Error: {e}")
             return pd.DataFrame()
 
 class QuantumIndicators:
     @staticmethod
     def compute(df):
-        if df.empty or len(df) < 52: return None
+        # Validation
+        if df.empty: return None
+        if len(df) < 30: 
+            st.warning("Insufficient data depth for Quantum Core calculations.")
+            return None
         
-        # Flatten data for numpy efficiency
-        close = df['close'].values.flatten()
-        high = df['high'].values.flatten()
-        low = df['low'].values.flatten()
+        try:
+            # Safely extract arrays
+            close = df['close'].values
+            high = df['high'].values
+            low = df['low'].values
+            
+            # A. ICHIMOKU CLOUD
+            nine_high = pd.Series(high).rolling(window=9).max()
+            nine_low = pd.Series(low).rolling(window=9).min()
+            tenkan = (nine_high + nine_low) / 2
 
-        # A. ICHIMOKU CLOUD (Trend Baseline)
-        nine_period_high = pd.Series(high).rolling(window=9).max()
-        nine_period_low = pd.Series(low).rolling(window=9).min()
-        tenkan_sen = (nine_period_high + nine_period_low) / 2 # Conversion Line
+            six_high = pd.Series(high).rolling(window=26).max()
+            six_low = pd.Series(low).rolling(window=26).min()
+            kijun = (six_high + six_low) / 2
 
-        twenty_six_high = pd.Series(high).rolling(window=26).max()
-        twenty_six_low = pd.Series(low).rolling(window=26).min()
-        kijun_sen = (twenty_six_high + twenty_six_low) / 2 # Base Line
+            span_a = ((tenkan + kijun) / 2).shift(26)
+            
+            # B. ADX / ATR
+            tr1 = np.abs(high - low)
+            tr2 = np.abs(high - np.roll(close, 1))
+            tr3 = np.abs(low - np.roll(close, 1))
+            tr = np.maximum(np.maximum(tr1, tr2), tr3)
+            atr = pd.Series(tr).rolling(14).mean().iloc[-1]
+            
+            # Handle NaN from rolling (replace with 0 or fill)
+            if np.isnan(atr): atr = 0
+            
+            # C. RSI
+            delta = np.diff(close)
+            gain = (delta * (delta > 0)).mean()
+            loss = (-delta * (delta < 0)).mean()
+            rs = gain / loss if loss != 0 else 0
+            rsi = 100 - (100 / (1 + rs))
 
-        senkou_span_a = ((tenkan_sen + kijun_sen) / 2).shift(26)
-        
-        # Current Price vs Cloud Logic
-        last_close = close[-1]
-        last_cloud = senkou_span_a.iloc[-1]
-        
-        # B. ADX (Trend Strength) - Simplified calculation for speed
-        tr1 = pd.DataFrame(high - low)
-        tr2 = pd.DataFrame(abs(high - pd.Series(close).shift(1)))
-        tr3 = pd.DataFrame(abs(low - pd.Series(close).shift(1)))
-        tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
-        atr = tr.rolling(14).mean().iloc[-1]
-        
-        # C. TITAN COMPOSITE SCORE (0-100)
-        # 1. Trend Direction (Ichimoku)
-        trend_score = 50
-        if last_close > last_cloud: trend_score += 20
-        elif last_close < last_cloud: trend_score -= 20
-        
-        if tenkan_sen.iloc[-1] > kijun_sen.iloc[-1]: trend_score += 15
-        elif tenkan_sen.iloc[-1] < kijun_sen.iloc[-1]: trend_score -= 15
+            # D. LOGIC
+            last_close = close[-1]
+            last_cloud = span_a.iloc[-1] if not np.isnan(span_a.iloc[-1]) else last_close
+            
+            # Scoring
+            score = 0
+            if last_close > last_cloud: score += 2.5
+            else: score -= 2.5
+            
+            if rsi < 30: score += 1.5
+            if rsi > 70: score -= 1.5
+            
+            score = max(-5, min(5, score))
+            
+            # E. LEVELS
+            fib_high = np.max(high[-50:])
+            fib_low = np.min(low[-50:])
+            fib_r = fib_high - ((fib_high - fib_low) * 0.382)
+            fib_s = fib_high - ((fib_high - fib_low) * 0.618)
+            
+            stop_dist = max(atr * 2.0, last_close * 0.01) # Min 1% stop
+            stop_loss = last_close - stop_dist if score > 0 else last_close + stop_dist
 
-        # 2. Momentum (RSI)
-        delta = np.diff(close)
-        gain = (delta * (delta > 0)).mean()
-        loss = (-delta * (delta < 0)).mean()
-        rs = gain / loss if loss != 0 else 0
-        rsi = 100 - (100 / (1 + rs))
-
-        # 3. Volatility Squeeze
-        std_dev = np.std(close[-20:])
-        is_squeeze = (std_dev * 2) < (atr * 1.5)
-
-        # Final Composite Calculation
-        final_score = trend_score
-        if rsi > 70: final_score -= 10 # Overbought penalty
-        if rsi < 30: final_score += 10 # Oversold boost
-        
-        # Normalized -5 to +5 scale for the UI
-        normalized_score = (final_score - 50) / 10
-        normalized_score = max(-5, min(5, normalized_score))
-
-        # D. FIBONACCI PIVOTS (Auto-Support/Resistance)
-        recent_high = max(high[-50:])
-        recent_low = min(low[-50:])
-        fib_382 = recent_high - ((recent_high - recent_low) * 0.382)
-        fib_618 = recent_high - ((recent_high - recent_low) * 0.618)
-
-        # E. STOP LOSS ENGINE (ATR Based)
-        stop_dist = atr * 2.5
-        stop_loss = last_close - stop_dist if normalized_score > 0 else last_close + stop_dist
-
-        return {
-            "score": normalized_score,
-            "rsi": rsi,
-            "atr": atr,
-            "squeeze": is_squeeze,
-            "ichimoku_bullish": last_close > last_cloud,
-            "fib_support": fib_618,
-            "fib_resistance": fib_382,
-            "stop_loss": stop_loss,
-            "last_price": last_close
-        }
+            return {
+                "score": score,
+                "rsi": rsi,
+                "atr": atr,
+                "squeeze": False, # Simplified for robustness
+                "ichimoku_bullish": last_close > last_cloud,
+                "fib_support": fib_s,
+                "fib_resistance": fib_r,
+                "stop_loss": stop_loss,
+                "last_price": last_close
+            }
+        except Exception as e:
+            st.error(f"Calculation Error: {e}")
+            return None
 
 # --- 4. INTELLIGENT BROADCASTING ---
 
@@ -224,11 +255,8 @@ def generate_obsidian_signal(ticker, interval, data, kind, ai_context=""):
     price = data['last_price']
     stop = data['stop_loss']
     
-    # Dynamic Emoji & Tone Selection based on Volatility
     volatility_emoji = "🌋" if data['atr'] > (price * 0.01) else "🌊"
-    trend_state = "DOMINANT BULL" if score > 3 else "DOMINANT BEAR" if score < -3 else "RANGE BOUND"
     
-    # Calculate R-Multiples
     risk = abs(price - stop)
     tp1 = price + (risk * 1.5) if score > 0 else price - (risk * 1.5)
     tp2 = price + (risk * 3.0) if score > 0 else price - (risk * 3.0)
@@ -255,8 +283,7 @@ def generate_obsidian_signal(ticker, interval, data, kind, ai_context=""):
 
 <b>🧠 QUANTUM METRICS</b>
 • Titan Score: {score:.1f}/5.0
-• Ichimoku Cloud: {'Above (Bullish)' if data['ichimoku_bullish'] else 'Below (Bearish)'}
-• Squeeze State: {'ACTIVE 🔥' if data['squeeze'] else 'Dormant'}
+• Ichimoku: {'Bullish Cloud' if data['ichimoku_bullish'] else 'Bearish Cloud'}
 
 <i>Timestamp: {datetime.now().strftime('%H:%M:%S UTC')}</i>
 """
@@ -266,12 +293,12 @@ def generate_obsidian_signal(ticker, interval, data, kind, ai_context=""):
 {meta}
 
 <b>🔍 MARKET CONTEXT</b>
-Price is currently trading at <b>${price:,.2f}</b>.
-Algorithm detects a <b>{trend_state}</b> regime.
+Price: <b>${price:,.2f}</b>
+RSI: {data['rsi']:.1f}
 
-<b>📐 KEY LEVELS (FIBONACCI)</b>
-• Resistance (0.382): ${data['fib_resistance']:,.2f}
-• Support (0.618): ${data['fib_support']:,.2f}
+<b>📐 KEY LEVELS</b>
+• Res: ${data['fib_resistance']:,.2f}
+• Sup: ${data['fib_support']:,.2f}
 
 <b>🤖 AI SYNTHESIS</b>
 {ai_context}
@@ -297,13 +324,9 @@ def main():
         st.session_state.config = {"ticker": "BTC-USD", "interval": "1h", "live": False}
     
     if 'tg_creds' not in st.session_state:
-        # Initialize with empty strings
         token = ""
         chat = ""
-        
-        # Safe Secrets Loading
         try:
-            # Check for top-level keys first
             if "TELEGRAM_TOKEN" in st.secrets:
                 token = st.secrets["TELEGRAM_TOKEN"]
             elif "telegram" in st.secrets and "token" in st.secrets["telegram"]:
@@ -313,33 +336,24 @@ def main():
                 chat = st.secrets["TELEGRAM_CHAT_ID"]
             elif "telegram" in st.secrets and "chat_id" in st.secrets["telegram"]:
                 chat = st.secrets["telegram"]["chat_id"]
-                
-        except FileNotFoundError:
-            # Secrets file missing is okay, we just default to manual input
-            pass
-        except Exception:
-            # Catch other potential loading errors
-            pass
+        except: pass
             
         st.session_state.tg_creds = {"token": token, "chat": chat}
 
-    # SIDEBAR: COMMAND CENTER
+    # SIDEBAR
     with st.sidebar:
         st.markdown("## 💠 TITAN OS")
         st.markdown("---")
         
-        # Asset Selection
         new_ticker = st.selectbox("ASSET TARGET", [t for cat in ASSET_CLASSES.values() for t in cat], index=0)
         new_interval = st.select_slider("TIMEFRAME", options=INTERVALS, value="1h")
         
-        # Update State
         if new_ticker != st.session_state.config['ticker']: st.session_state.config['ticker'] = new_ticker
         st.session_state.config['interval'] = new_interval
         
         st.markdown("---")
         st.markdown("### 📡 UPLINK")
         
-        # Visual Indicator for Secrets
         has_secrets = False
         try:
             if "TELEGRAM_TOKEN" in st.secrets: has_secrets = True
@@ -350,12 +364,11 @@ def main():
         else:
             st.caption("⚠️ MANUAL MODE")
             
-        # These inputs will now pre-fill if secrets were found
         st.session_state.tg_creds['token'] = st.text_input("BOT TOKEN", value=st.session_state.tg_creds['token'], type="password")
         st.session_state.tg_creds['chat'] = st.text_input("CHAT ID", value=st.session_state.tg_creds['chat'])
         
         st.markdown("---")
-        st.session_state.config['live'] = st.checkbox("🔴 LIVE SYNC (10s)", value=st.session_state.config['live'])
+        st.session_state.config['live'] = st.checkbox("🔴 LIVE SYNC (15s)", value=st.session_state.config['live'])
 
     # MAIN DISPLAY
     col_logo, col_stat = st.columns([3, 1])
@@ -367,17 +380,19 @@ def main():
     # 1. FETCH & COMPUTE
     df = MarketDataEngine.fetch_live(st.session_state.config['ticker'], st.session_state.config['interval'])
     
+    # Check if empty - if so, stop here
     if df.empty:
-        st.error("NO SIGNAL DETECTED. MARKET MAY BE CLOSED OR API LIMITED.")
-        if st.session_state.config['live']: time.sleep(10); st.rerun()
+        if st.session_state.config['live']: 
+            time.sleep(15) 
+            st.rerun()
         return
 
     metrics = QuantumIndicators.compute(df)
     if not metrics:
-        st.warning("INITIALIZING QUANTUM CORE... (Need more data)")
+        st.warning("PROCESSING QUANTUM CORE...")
         return
 
-    # 2. HEADS UP DISPLAY (HUD)
+    # 2. HEADS UP DISPLAY
     m1, m2, m3, m4 = st.columns(4)
     
     with m1:
@@ -390,7 +405,7 @@ def main():
         """, unsafe_allow_html=True)
         
     with m2:
-        st.metric("RSI MOMENTUM", f"{metrics['rsi']:.1f}", "OVERSOLD" if metrics['rsi'] < 30 else "OVERBOUGHT" if metrics['rsi'] > 70 else "NEUTRAL")
+        st.metric("RSI MOMENTUM", f"{metrics['rsi']:.1f}")
         
     with m3:
         st.metric("VOLATILITY (ATR)", f"{metrics['atr']:.2f}")
@@ -406,36 +421,28 @@ def main():
         </div>
         """, unsafe_allow_html=True)
 
-    # 3. ADVANCED CHARTING
+    # 3. CHARTING
     row_chart, row_actions = st.columns([3, 1])
     
     with row_chart:
         fig = go.Figure()
-        
-        # Candles
         fig.add_trace(go.Candlestick(
             x=df.index, open=df['open'], high=df['high'], low=df['low'], close=df['close'],
             increasing_line_color='#22d3ee', decreasing_line_color='#f87171', name='Price'
         ))
-        
-        # Stop Loss Line (Visual Aid)
-        fig.add_hline(y=metrics['stop_loss'], line_dash="dot", line_color="gray", annotation_text="SUGGESTED STOP")
+        fig.add_hline(y=metrics['stop_loss'], line_dash="dot", line_color="gray", annotation_text="STOP")
 
         fig.update_layout(
-            height=500,
-            margin=dict(l=0, r=0, t=0, b=0),
-            paper_bgcolor='rgba(0,0,0,0)',
-            plot_bgcolor='rgba(0,0,0,0)',
+            height=500, margin=dict(l=0, r=0, t=0, b=0),
+            paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
             xaxis_rangeslider_visible=False,
             font=dict(family="JetBrains Mono", color="#71717a"),
-            xaxis=dict(showgrid=False),
-            yaxis=dict(showgrid=True, gridcolor='rgba(255,255,255,0.05)')
+            xaxis=dict(showgrid=False), yaxis=dict(showgrid=True, gridcolor='rgba(255,255,255,0.05)')
         )
         st.plotly_chart(fig, use_container_width=True)
 
     with row_actions:
         st.markdown("### 💠 BROADCAST")
-        st.info(f"Signal Strength: {abs(metrics['score'])/5*100:.0f}%")
         
         if st.button("🚀 TRANSMIT: SCALP", use_container_width=True):
             msg = generate_obsidian_signal(st.session_state.config['ticker'], st.session_state.config['interval'], metrics, "SCALP_Protocol")
@@ -445,8 +452,7 @@ def main():
                 st.toast("UPLINK FAILED: CHECK CREDS", icon="❌")
 
         if st.button("🧠 TRANSMIT: INTEL", use_container_width=True):
-            # Mock AI generation for speed in this demo
-            ai_mock = "Market structure suggests a liquidity sweep of recent lows. Ichimoku baseline holds as support."
+            ai_mock = "Structure suggests consolidation. Waiting for breakout."
             msg = generate_obsidian_signal(st.session_state.config['ticker'], st.session_state.config['interval'], metrics, "INTEL_Brief", ai_mock)
             telegram_dispatch(st.session_state.tg_creds['token'], st.session_state.tg_creds['chat'], msg)
             st.toast("INTEL PACKET SENT", icon="✅")
@@ -455,11 +461,10 @@ def main():
         st.markdown("### 🛡️ RISK MATRIX")
         st.write(f"Entry: **${metrics['last_price']:,.2f}**")
         st.write(f"Stop:  **${metrics['stop_loss']:,.2f}**")
-        st.caption("Values update live with chart.")
 
     # LIVE LOOP
     if st.session_state.config['live']:
-        time.sleep(10)
+        time.sleep(15)
         st.rerun()
 
 if __name__ == "__main__":
