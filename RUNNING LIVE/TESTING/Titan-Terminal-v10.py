@@ -6,7 +6,6 @@ from plotly.subplots import make_subplots
 import pandas as pd
 import numpy as np
 from openai import OpenAI
-import calendar
 import datetime
 import requests
 import urllib.parse
@@ -18,13 +17,15 @@ import math
 import io
 import xlsxwriter
 import streamlit.components.v1 as components
+import asyncio
+import logging
 
 # ==========================================
 # 1. PAGE CONFIGURATION & CUSTOM UI
 # ==========================================
-st.set_page_config(layout="wide", page_title="🏦Titan Terminal v10", page_icon="👁️")
+st.set_page_config(layout="wide", page_title="🏦 Titan Terminal v10", page_icon="👁️")
 
-# --- CUSTOM CSS FOR "DARKPOOL" AESTHETIC (Merged Styles) ---
+# --- CUSTOM CSS FOR "DARKPOOL" & "MOBILE" AESTHETIC ---
 st.markdown("""
 <style>
 .stApp {
@@ -77,7 +78,7 @@ div[data-testid="stMetricValue"] {
     color: #00ff00;
     border-bottom: 2px solid #00ff00;
 }
-/* MOBILE REPORT CARDS (From Kimis-Signals) */
+/* KIMI MOBILE REPORT CARDS */
 .report-card {
     background-color: #161b22;
     border-left: 4px solid #00ff00;
@@ -89,6 +90,14 @@ div[data-testid="stMetricValue"] {
 .report-header { font-size: 1.1rem; font-weight: bold; color: #fff; margin-bottom: 8px; border-bottom: 1px solid #333; padding-bottom: 5px; }
 .report-item { margin-bottom: 5px; font-size: 0.9rem; color: #aaa; }
 .highlight { color: #00ff00; font-weight: bold; }
+/* AI CARD */
+.ai-card {
+    background: linear-gradient(135deg, #1f2833 0%, #0b0c10 100%);
+    border: 1px solid #45a29e;
+    border-radius: 12px;
+    padding: 15px;
+    margin-bottom: 15px;
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -162,7 +171,7 @@ class SignalDatabase:
 db = SignalDatabase()
 
 # ==========================================
-# 3. DATA ENGINE
+# 3. DATA ENGINE & UTILS
 # ==========================================
 @st.cache_data(ttl=3600)
 def get_fundamentals(ticker):
@@ -240,9 +249,6 @@ def calculate_hma(series, length):
     wma_half = calculate_wma(series, half_length)
     wma_full = calculate_wma(series, length)
     return calculate_wma(2 * wma_half - wma_full, sqrt_length)
-
-def calculate_rma(series, length):
-    return series.ewm(alpha=1/length, adjust=False).mean()
 
 def calculate_atr(df, length=14):
     high_low = df['High'] - df['Low']
@@ -335,7 +341,7 @@ def calc_apex_flux(df, length=14):
     return df
 
 # --- INDICATOR AGGREGATOR ---
-def calc_indicators(df, apex_cfg):
+def calc_indicators(df, apex_mult=1.5):
     df = df.copy()
     
     # 1. Base
@@ -346,7 +352,7 @@ def calc_indicators(df, apex_cfg):
     
     # 2. Apex Trend (Master)
     base = calculate_hma(df['Close'], 55)
-    atr_band = df['ATR'] * apex_cfg['mult']
+    atr_band = df['ATR'] * apex_mult
     df['Apex_Upper'] = base + atr_band
     df['Apex_Lower'] = base - atr_band
     trend = np.zeros(len(df)); trend[0] = 1
@@ -470,15 +476,22 @@ def generate_axiom_report(last, ticker):
 {"High-Energy Event Likely" if abs(last['RQZO']) > 1 else "Standard Volatility"}
 """
 
-def send_telegram(token, chat_id, text, parse_mode="Markdown"):
+def send_telegram(token, chat_id, text, excel_buffer=None, filename=None):
     url = f"https://api.telegram.org/bot{token}/sendMessage"
     try:
         # Simple splitting to avoid 4096 limit
         if len(text) > 4000:
             for i in range(0, len(text), 4000):
-                requests.post(url, json={"chat_id": chat_id, "text": text[i:i+4000], "parse_mode": parse_mode})
+                requests.post(url, json={"chat_id": chat_id, "text": text[i:i+4000], "parse_mode": "Markdown"})
         else:
-            requests.post(url, json={"chat_id": chat_id, "text": text, "parse_mode": parse_mode})
+            requests.post(url, json={"chat_id": chat_id, "text": text, "parse_mode": "Markdown"})
+        
+        # Send Document if provided
+        if excel_buffer:
+            url_doc = f"https://api.telegram.org/bot{token}/sendDocument"
+            files = {'document': (filename, excel_buffer, 'application/vnd.ms-excel')}
+            requests.post(url_doc, data={"chat_id": chat_id}, files=files)
+            
         return True
     except: return False
 
@@ -511,6 +524,7 @@ def run_screener(tickers):
                 "Score": score
             })
         except: continue
+    if not results: return pd.DataFrame()
     return pd.DataFrame(results).sort_values("Score", ascending=False)
 
 # ==========================================
@@ -537,6 +551,16 @@ def ask_ai(df, ticker, persona, api_key):
         )
         return res.choices[0].message.content
     except Exception as e: return f"Error: {e}"
+
+def run_monte_carlo(df, days=30, simulations=1000):
+    last_price = df['Close'].iloc[-1]
+    returns = df['Close'].pct_change().dropna()
+    mu = returns.mean()
+    sigma = returns.std()
+    sim_rets = np.random.normal(mu, sigma, (days, simulations))
+    paths = np.zeros((days, simulations)); paths[0] = last_price
+    for t in range(1, days): paths[t] = paths[t-1] * (1 + sim_rets[t])
+    return paths
 
 # ==========================================
 # 9. MAIN DASHBOARD LAYOUT
@@ -587,8 +611,7 @@ if app_mode == "Single Ticker":
             df = safe_download(ticker, "1y", interval)
             if df is not None:
                 # Run All Engines
-                cfg = {'mult': apex_mult}
-                df = calc_indicators(df, cfg)
+                df = calc_indicators(df, apex_mult)
                 fund = get_fundamentals(ticker)
                 
                 # Signal Logic
@@ -657,7 +680,7 @@ if app_mode == "Single Ticker":
                         st.markdown(rpt)
                         
                 with t5: # Quant
-                    paths = QuantEngine.run_monte_carlo(df)
+                    paths = run_monte_carlo(df)
                     st.line_chart(paths[:, :20])
                     
                 with t6: # SMC
@@ -692,6 +715,27 @@ if app_mode == "Single Ticker":
                             else: st.error("Failed.")
                         else: st.error("Missing Credentials")
 
+                    # Signal Validation Checklist (Visual)
+                    st.markdown("---")
+                    st.subheader("✅ Signal Validation (Kimis Engine)")
+                    
+                    titan_sig = 1 if last['Apex_Trend'] == 1 else -1
+                    apex_sig = last['Apex_Trend']
+                    gann_sig = last['Gann_Trend']
+                    
+                    val_items = {
+                        "Trend Confirmation": titan_sig == apex_sig,
+                        "Volume Surge": last['RVOL'] > 1.2,
+                        "Momentum Align": last['Sqz_Mom'] > 0 if titan_sig==1 else last['Sqz_Mom'] < 0,
+                        "No Squeeze": last['Sqz_Mom'] != 0, 
+                        "Sentiment Align": last['FG_Index'] > 50 if titan_sig==1 else last['FG_Index'] < 50
+                    }
+                    
+                    for item, passed in val_items.items():
+                        status = "✅ PASS" if passed else "❌ FAIL"
+                        color = "#00e676" if passed else "#ff1744"
+                        st.markdown(f'<div class="report-item" style="color:{color};">{item}: <strong>{status}</strong></div>', unsafe_allow_html=True)
+
             else: st.error("Data Download Failed")
 
 elif app_mode == "Market Screener":
@@ -703,11 +747,20 @@ elif app_mode == "Market Screener":
     if st.button("Run Screen"):
         with st.spinner("Scanning..."):
             res_df = run_screener(univ)
-            st.dataframe(res_df)
-            
-            # Excel Export
-            buffer = io.BytesIO()
-            with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
-                res_df.to_excel(writer, index=False)
-            
-            st.download_button("Download Excel", buffer, "screener_results.xlsx")
+            if not res_df.empty:
+                st.dataframe(res_df)
+                
+                # Excel Export
+                buffer = io.BytesIO()
+                with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
+                    res_df.to_excel(writer, index=False)
+                
+                st.download_button("Download Excel", buffer, "screener_results.xlsx")
+                
+                if st.button("Broadcast Top Pick to TG"):
+                    if tg_token and tg_chat:
+                        top = res_df.iloc[0]
+                        msg = f"🔍 TOP PICK: {top['Ticker']} | Score: {top['Score']}"
+                        send_telegram(tg_token, tg_chat, msg)
+            else:
+                st.warning("No matches found or data error.")
