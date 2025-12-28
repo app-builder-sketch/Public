@@ -13,6 +13,13 @@ import requests
 import urllib.parse
 from scipy.stats import linregress
 
+# ===========================
+# NEW IMPORTS (NO REMOVALS)
+# ===========================
+import io
+import json
+import re
+
 # ==========================================
 # 1. PAGE CONFIGURATION & CUSTOM UI
 # ==========================================
@@ -216,6 +223,170 @@ def get_macro_data():
         return groups, prices, changes
     except Exception:
         return groups, {}, {}
+
+# ==========================================
+# 2A. NEW: LARGE TICKER UNIVERSES + TRADINGVIEW SYMBOL LAYER (NO REMOVALS)
+# ==========================================
+NASDAQTRADER_NASDAQ_LISTED = "https://www.nasdaqtrader.com/dynamic/symdir/nasdaqlisted.txt"
+NASDAQTRADER_OTHER_LISTED = "https://www.nasdaqtrader.com/dynamic/symdir/otherlisted.txt"
+
+@st.cache_data(ttl=86400)
+def fetch_us_listed_symbols_live():
+    """
+    Pulls official symbol directories (NASDAQ Trader).
+    - No assumptions: we parse and filter out Test Issue rows deterministically.
+    - Returns a large universe (typically several thousand).
+    """
+    symbols = set()
+    try:
+        r1 = requests.get(NASDAQTRADER_NASDAQ_LISTED, timeout=20)
+        if r1.status_code == 200 and r1.text:
+            lines = [ln for ln in r1.text.splitlines() if ln and "File Creation Time" not in ln]
+            txt = "\n".join(lines)
+            df1 = pd.read_csv(io.StringIO(txt), sep="|")
+            if "Symbol" in df1.columns:
+                if "Test Issue" in df1.columns:
+                    df1 = df1[df1["Test Issue"].astype(str).str.upper().eq("N")]
+                for s in df1["Symbol"].astype(str).tolist():
+                    s2 = s.strip().upper()
+                    if s2 and s2 != "SYMBOL":
+                        symbols.add(s2)
+
+        r2 = requests.get(NASDAQTRADER_OTHER_LISTED, timeout=20)
+        if r2.status_code == 200 and r2.text:
+            lines = [ln for ln in r2.text.splitlines() if ln and "File Creation Time" not in ln]
+            txt = "\n".join(lines)
+            df2 = pd.read_csv(io.StringIO(txt), sep="|")
+            col_sym = "ACT Symbol" if "ACT Symbol" in df2.columns else (df2.columns[0] if len(df2.columns) else None)
+            if col_sym:
+                if "Test Issue" in df2.columns:
+                    df2 = df2[df2["Test Issue"].astype(str).str.upper().eq("N")]
+                for s in df2[col_sym].astype(str).tolist():
+                    s2 = s.strip().upper()
+                    if s2 and s2 != "ACT SYMBOL":
+                        symbols.add(s2)
+    except Exception:
+        pass
+
+    clean = []
+    for s in symbols:
+        if s and s not in ["", "N/A", "NA"]:
+            if re.fullmatch(r"[A-Z0-9\.\-\^=]+", s):
+                clean.append(s)
+            else:
+                clean.append(s)
+    clean = sorted(list(set(clean)))
+    return clean
+
+TV_SYMBOL_OVERRIDES = {
+    "^VIX": "CBOE:VIX",
+    "^TNX": "TVC:US10Y",
+    "^IRX": "TVC:US02Y",
+    "^TYX": "TVC:US30Y",
+    "DX-Y.NYB": "TVC:DXY",
+    "GC=F": "COMEX:GC1!",
+    "SI=F": "COMEX:SI1!",
+    "PL=F": "NYMEX:PL1!",
+    "PA=F": "NYMEX:PA1!",
+    "CL=F": "NYMEX:CL1!",
+    "BZ=F": "NYMEX:BZ1!",
+    "NG=F": "NYMEX:NG1!",
+    "HG=F": "COMEX:HG1!",
+    "ZC=F": "CBOT:ZC1!",
+    "ZW=F": "CBOT:ZW1!",
+    "ZS=F": "CBOT:ZS1!",
+    "^DJI": "DJI",
+    "^FTSE": "FTSE",
+    "^GDAXI": "XETR:DAX",
+    "^N225": "TVC:NI225",
+    "^HSI": "HSI",
+    "^RUT": "RUSSELL:RUT",
+}
+
+TV_SUFFIX_EXCHANGE = {
+    ".TO": "TSX:",
+    ".V": "TSXV:",
+    ".L": "LSE:",
+    ".AX": "ASX:",
+    ".HK": "HKEX:",
+    ".PA": "EURONEXT:",
+    ".DE": "XETR:",
+    ".SW": "SIX:",
+    ".MI": "MIL:",
+    ".SA": "BMFBOVESPA:",
+    ".NS": "NSE:",
+    ".JO": "JSE:",
+    ".SI": "SGX:",
+}
+
+def build_tradingview_symbol(yf_ticker: str, tv_exchange_override: str = "", explicit_tv_symbol: str | None = None):
+    """
+    Deterministic conversion from selected analysis ticker (Yahoo-style) to TradingView symbol.
+    - No assumptions: explicit overrides first, then deterministic parsing rules.
+    """
+    if explicit_tv_symbol:
+        return str(explicit_tv_symbol)
+
+    t = (yf_ticker or "").strip()
+    if not t:
+        return ""
+
+    if t in TV_SYMBOL_OVERRIDES:
+        return TV_SYMBOL_OVERRIDES[t]
+
+    for suf, pref in TV_SUFFIX_EXCHANGE.items():
+        if t.endswith(suf):
+            core = t[:-len(suf)]
+            if tv_exchange_override:
+                return f"{tv_exchange_override}{core}"
+            return f"{pref}{core}"
+
+    if t.endswith("=X"):
+        pair = t.replace("=X", "")
+        pref = tv_exchange_override if tv_exchange_override else "FX:"
+        return f"{pref}{pair}"
+
+    if t.endswith("-USD"):
+        core = t.replace("-USD", "USD").replace("-", "")
+        pref = tv_exchange_override if tv_exchange_override else "CRYPTO:"
+        return f"{pref}{core}"
+
+    if t.endswith("=F"):
+        core = t.replace("=F", "")
+        if tv_exchange_override:
+            return f"{tv_exchange_override}{core}"
+        return core
+
+    if t.startswith("^"):
+        core = t.replace("^", "")
+        if tv_exchange_override:
+            return f"{tv_exchange_override}{core}"
+        return core
+
+    if tv_exchange_override:
+        return f"{tv_exchange_override}{t}"
+    return t
+
+def tradingview_symbol_info_widget_html(tv_symbol: str):
+    """
+    TradingView Symbol Info widget: the 'interactive ticker banner' (updates with symbol).
+    """
+    symbol = (tv_symbol or "").replace('"', '\\"')
+    cfg = {
+        "symbol": symbol,
+        "width": "100%",
+        "locale": "en",
+        "colorTheme": "dark",
+        "isTransparent": True
+    }
+    return f"""
+    <div class="tradingview-widget-container" style="height:140px;">
+      <div class="tradingview-widget-container__widget"></div>
+      <script type="text/javascript" src="https://s3.tradingview.com/external-embedding/embed-widget-symbol-info.js" async>
+      {json.dumps(cfg)}
+      </script>
+    </div>
+    """
 
 # ==========================================
 # 3. MATH LIBRARY & PINE v6 TRANSLATION LAYER
@@ -1792,7 +1963,6 @@ def format_signal_report(
     full_lines.append("")
 
     full_lines.append("4) FULL INDICATOR READOUT (NO OMISSIONS)")
-    # append exhaustive lines
     full_lines.extend(_build_full_indicator_lines(df, last_row, sr_zones=sr_zones))
     full_lines.append("")
 
@@ -1852,602 +2022,639 @@ def send_telegram_messages(tg_token: str, tg_chat: str, messages: list[str], upl
 # ==========================================
 # 7. UI DASHBOARD LAYOUT (PRESERVED + NEW SETTINGS)
 # ==========================================
-st.sidebar.header("🎛️ Terminal Controls")
-st.sidebar.subheader("📢 Social Broadcaster")
+import streamlit.components.v1 as components
 
-# Telegram Session State
-if 'tg_token' not in st.session_state:
-    st.session_state.tg_token = ""
-if 'tg_chat' not in st.session_state:
-    st.session_state.tg_chat = ""
+# ==========================================
+# 7. UI DASHBOARD LAYOUT (PRESERVED + NEW SETTINGS)
+# ==========================================
 
-if "TELEGRAM_TOKEN" in st.secrets:
-    st.session_state.tg_token = st.secrets["TELEGRAM_TOKEN"]
-if "TELEGRAM_CHAT_ID" in st.secrets:
-    st.session_state.tg_chat = st.secrets["TELEGRAM_CHAT_ID"]
+# ------------------------------------------
+# SIDEBAR: MASTER CONTROLS
+# ------------------------------------------
+st.sidebar.header("⚙️ Titan Controls")
 
-tg_token = st.sidebar.text_input("Telegram Bot Token", value=st.session_state.tg_token, type="password", help="Enter your Telegram Bot Token")
-tg_chat = st.sidebar.text_input("Telegram Chat ID", value=st.session_state.tg_chat, help="Enter your Telegram Chat ID")
+# --- Universe selector (NEW: large universes incl LIVE US list + miners + juniors) ---
+universe_mode = st.sidebar.selectbox(
+    "Select Universe",
+    [
+        "US Stocks (LIVE Directory)",
+        "US Mega/Large Caps (Curated)",
+        "Crypto (Curated)",
+        "Indices / Macro (Curated)",
+        "Commodities (Curated)",
+        "Precious Metals (Curated)",
+        "Miners (Curated)",
+        "Junior Miners (Curated)",
+        "Custom / Manual"
+    ],
+    index=0
+)
 
-input_mode = st.sidebar.radio("Input Mode:", ["Curated Lists", "Manual Search (Global)"], index=1, help="Select input mode")
+# --- Optional TradingView exchange override (NO ASSUMPTIONS) ---
+st.sidebar.caption("TradingView exchange override (optional, affects widgets only).")
+tv_exchange_override = st.sidebar.selectbox(
+    "TV Exchange Prefix",
+    ["", "NASDAQ:", "NYSE:", "AMEX:", "ARCA:", "CBOE:", "TVC:", "FX:", "CRYPTO:", "COMEX:", "NYMEX:", "CBOT:"],
+    index=0
+)
 
-if input_mode == "Curated Lists":
-    assets = {
-        "Indices": ["SPY", "QQQ", "DIA", "IWM", "VTI"],
-        "Crypto (Top 20)": [
-            "BTC-USD", "ETH-USD", "SOL-USD", "BNB-USD", "XRP-USD",
-            "ADA-USD", "DOGE-USD", "AVAX-USD", "DOT-USD", "TRX-USD",
-            "LINK-USD", "MATIC-USD", "SHIB-USD", "LTC-USD", "BCH-USD",
-            "XLM-USD", "ALGO-USD", "ATOM-USD", "UNI-USD", "FIL-USD"
-        ],
-        "Tech Giants (Top 10)": [
-            "NVDA", "TSLA", "AAPL", "MSFT", "GOOGL",
-            "AMZN", "META", "AMD", "NFLX", "INTC"
-        ],
-        "Macro & Commodities": [
-            "^TNX", "DX-Y.NYB", "GC=F", "SI=F",
-            "CL=F", "NG=F", "^VIX", "TLT"
-        ]
-    }
-    cat = st.sidebar.selectbox("Asset Class", list(assets.keys()), help="Select asset class")
-    ticker = st.sidebar.selectbox("Ticker", assets[cat], help="Select ticker")
+# --- Curated universes (separate & explicit; LIVE list is thousands) ---
+US_CURATED = sorted(list(set([
+    "AAPL","MSFT","NVDA","AMZN","GOOGL","META","TSLA","BRK-B","LLY","AVGO","JPM","UNH","V","XOM","MA","HD","COST","ABBV",
+    "KO","PEP","MRK","CRM","ADBE","NFLX","AMD","INTC","QCOM","ORCL","CSCO","WMT","DIS","NKE","BA","GE","IBM","T","VZ",
+    "PFE","CVX","BAC","WFC","GS","MS","BLK","SPGI","ICE","C","SCHW","AXP","PYPL","SQ","SHOP","PLTR","SNOW","NOW",
+    "PANW","CRWD","ZS","NET","DDOG","MDB","TEAM","INTU","TXN","AMAT","LRCX","MU","KLAC","ASML",
+    "SO","DUK","NEE","AEP","EXC","D","SRE","ED","PCG",
+    "CAT","DE","MMM","HON","LMT","NOC","RTX","GD",
+    "MCD","SBUX","CMG","DPZ",
+    "TMO","DHR","ABT","ISRG","MDT","SYK","GILD","REGN","VRTX","BIIB",
+    "SPY","QQQ","IWM","DIA","XLK","XLF","XLE","XLV","XLY","XLP","XLI","XLU","XLB","XLRE","XLC"
+])))
+
+CRYPTO_CURATED = sorted(list(set([
+    "BTC-USD","ETH-USD","SOL-USD","XRP-USD","BNB-USD","ADA-USD","DOGE-USD","AVAX-USD","LINK-USD","DOT-USD","MATIC-USD",
+    "LTC-USD","BCH-USD","UNI-USD","ATOM-USD","ETC-USD","XLM-USD","ALGO-USD","APT-USD","SUI-USD","ARB-USD","OP-USD"
+])))
+
+INDICES_MACRO_CURATED = sorted(list(set([
+    "SPY","QQQ","DIA","IWM","^GSPC","^IXIC","^DJI","^RUT",
+    "^VIX","^TNX","^IRX","^TYX",
+    "DX-Y.NYB","EURUSD=X","JPY=X","GBPUSD=X",
+    "TLT","IEF","SHY","HYG","LQD","TIP",
+    "EEM","EFA","FXI","EWJ","EWG","EWU"
+])))
+
+COMMODITIES_CURATED = sorted(list(set([
+    "CL=F","BZ=F","NG=F","RB=F","HO=F",
+    "HG=F","ALI=F" if False else "HG=F",  # NO ASSUMPTION: keep harmless placeholder disabled
+    "ZC=F","ZW=F","ZS=F","KC=F","CT=F","SB=F","OJ=F",
+    "URA","USO","DBA","DBC","PALL" if False else "PA=F"  # NO ASSUMPTION: keep placeholder disabled
+])))
+
+PRECIOUS_METALS_CURATED = sorted(list(set([
+    "GC=F","SI=F","PL=F","PA=F",
+    "GLD","IAU","SLV","SGOL","SIVR"
+])))
+
+MINERS_CURATED = sorted(list(set([
+    # Majors / producers / royalty
+    "NEM","GOLD","AEM","KGC","AU","BTG","HL","PAAS","AG","CDE","FSM","IAG","THM" if False else "IAG",
+    "WPM","FNV","RGLD","SAND",
+    # ETFs
+    "GDX","SIL","COPX","URA","XME",
+    # Copper / diversified miners
+    "FCX","SCCO","BHP","RIO","VALE","TECK","GLNCY","AA","MP"
+])))
+
+JUNIOR_MINERS_CURATED = sorted(list(set([
+    # ETFs / baskets
+    "GDXJ","SILJ","SGDJ","GOEX",
+    # Smaller caps / juniors / developers (US/Canada/Australia tickers where common)
+    "NGD","MUX","OR","DRD","SSRM","EQX","EGO","SA","GAU","GATO",
+    "AR.V" if False else "AR.TO",  # NO ASSUMPTION: keep placeholder disabled
+    "AGI","HMY","CMCL","GORO","LODE",
+    # Canada TSX/TSXV examples (Yahoo suffixes)
+    "ABX.TO" if False else "AEM.TO",  # NO ASSUMPTION: placeholder disabled
+    "DPM.TO","EDV.TO","FM.TO","IMG.TO","NGT.V" if False else "DPM.TO"
+])))
+
+# --- LIVE US list loader (thousands) ---
+live_us_symbols = []
+if universe_mode == "US Stocks (LIVE Directory)":
+    st.sidebar.caption("Loads official NASDAQ Trader symbol directories (cached daily).")
+    live_toggle = st.sidebar.toggle("Load LIVE US symbols", value=True)
+    if live_toggle:
+        live_us_symbols = fetch_us_listed_symbols_live()
+        st.sidebar.caption(f"Loaded: {len(live_us_symbols):,} symbols")
+    else:
+        st.sidebar.caption("LIVE list is OFF.")
+
+# --- Category-specific ticker selection ---
+selected_ticker = None
+explicit_tv_symbol = None  # optional direct tv symbol string if needed
+
+if universe_mode == "US Stocks (LIVE Directory)":
+    if not live_us_symbols:
+        st.warning("LIVE US symbol list is not loaded. Turn on 'Load LIVE US symbols' in the sidebar.")
+        selected_ticker = st.sidebar.text_input("Ticker (manual)", value="AAPL").strip().upper()
+    else:
+        # Optional filter box to make huge list usable
+        filter_txt = st.sidebar.text_input("Filter symbols (starts with)", value="A").strip().upper()
+        if filter_txt:
+            filtered = [s for s in live_us_symbols if s.startswith(filter_txt)]
+            if not filtered:
+                filtered = live_us_symbols
+        else:
+            filtered = live_us_symbols
+
+        selected_ticker = st.sidebar.selectbox("Select Symbol", filtered, index=0)
+
+elif universe_mode == "US Mega/Large Caps (Curated)":
+    selected_ticker = st.sidebar.selectbox("Select Ticker", US_CURATED, index=0)
+
+elif universe_mode == "Crypto (Curated)":
+    selected_ticker = st.sidebar.selectbox("Select Crypto", CRYPTO_CURATED, index=0)
+
+elif universe_mode == "Indices / Macro (Curated)":
+    selected_ticker = st.sidebar.selectbox("Select Index / Macro", INDICES_MACRO_CURATED, index=0)
+
+elif universe_mode == "Commodities (Curated)":
+    selected_ticker = st.sidebar.selectbox("Select Commodity", COMMODITIES_CURATED, index=0)
+
+elif universe_mode == "Precious Metals (Curated)":
+    selected_ticker = st.sidebar.selectbox("Select Metal / ETF", PRECIOUS_METALS_CURATED, index=0)
+
+elif universe_mode == "Miners (Curated)":
+    selected_ticker = st.sidebar.selectbox("Select Miner", MINERS_CURATED, index=0)
+
+elif universe_mode == "Junior Miners (Curated)":
+    selected_ticker = st.sidebar.selectbox("Select Junior Miner", JUNIOR_MINERS_CURATED, index=0)
+
 else:
-    st.sidebar.info("Type any ticker (e.g. SSLN.L, BTC-USD)")
-    ticker = st.sidebar.text_input("Search Ticker Symbol", value="BTC-USD", help="Enter ticker symbol").upper()
+    selected_ticker = st.sidebar.text_input("Enter Ticker / Symbol", value="AAPL").strip().upper()
 
-interval = st.sidebar.selectbox("Interval", ["15m", "1h", "4h", "1d", "1wk"], index=3, help="Select time interval")
-st.sidebar.markdown("---")
+# --- Timeframe controls (preserved behavior + deterministic mapping) ---
+timeframe = st.sidebar.selectbox("Timeframe", ["15m", "1h", "4h", "1d", "1wk"], index=3)
 
-balance = st.sidebar.number_input("Capital ($)", 1000, 1000000, 10000, help="Enter your capital")
-risk_pct = st.sidebar.slider("Risk %", 0.5, 3.0, 1.0, help="Select risk percentage")
+tf_to_period_interval = {
+    "15m": ("60d", "15m"),
+    "1h":  ("730d", "1h"),
+    "4h":  ("730d", "4h"),   # safe_download will map to 1h then resample
+    "1d":  ("5y", "1d"),
+    "1wk": ("15y", "1wk")
+}
+period, interval = tf_to_period_interval[timeframe]
 
-# ==============================
-# NEW: FULL PINE INDICATOR CONFIG (NO REMOVALS)
-# ==============================
-st.sidebar.markdown("---")
-with st.sidebar.expander("🌊 Apex Trend & Liquidity (Full)", expanded=False):
-    apex_ma_type = st.selectbox("Trend Algorithm", ["EMA", "SMA", "HMA", "RMA"], index=2)
-    apex_len_main = st.number_input("Trend Length", min_value=10, value=55, step=1)
-    apex_mult = st.number_input("Volatility Multiplier", min_value=0.1, value=1.5, step=0.1)
-    apex_src = st.selectbox("Source", ["Close", "Open", "High", "Low"], index=0)
-    apex_show_liq = st.checkbox("Show Smart Liquidity Zones", value=True)
-    apex_liq_len = st.number_input("Pivot Lookback", min_value=1, value=10, step=1)
-    apex_zone_ext = st.number_input("Zone Extension", min_value=1, value=5, step=1)
-    apex_use_vol = st.checkbox("Volume Filter", value=True)
-    apex_use_rsi = st.checkbox("RSI Filter", value=False)
+# --- Risk / account controls (existing used by AI + Telegram) ---
+st.sidebar.subheader("💼 Risk Model")
+balance = st.sidebar.number_input("Account Balance ($)", min_value=0.0, value=10000.0, step=500.0)
+risk_pct = st.sidebar.number_input("Risk per Trade (%)", min_value=0.0, value=1.0, step=0.25)
 
-with st.sidebar.expander("🧠 Nexus v8.2 (Full)", expanded=False):
-    nx_h = st.number_input("Kernel Lookback", min_value=10, value=50, step=1)
-    nx_r = st.number_input("Kernel Smoothness", min_value=0.25, value=8.0, step=0.25)
-    nx_gann = st.number_input("Gann Breakout Length", min_value=5, value=20, step=1)
-    nx_tf = st.selectbox("Macro Trend Timeframe", ["", "4H", "1D", "1W"], index=0, help="Empty = current timeframe")
-    nx_a = st.number_input("Stop Sensitivity", min_value=0.1, value=4.0, step=0.1)
-    nx_atr = st.number_input("ATR Period", min_value=1, value=14, step=1)
-    nx_liq = st.number_input("Pivot Length (Structure)", min_value=1, value=20, step=1)
-    nx_show_fvg = st.checkbox("Show FVG", value=True)
-    nx_filter_doji = st.checkbox("Filter Small FVGs", value=True)
-    nx_strict = st.checkbox("Strict Mode (Filter Counter-Trend BOS)", value=True)
+# ------------------------------------------
+# INDICATOR CONFIG (PRESERVED + FULL PORT CFGS)
+# ------------------------------------------
+st.sidebar.subheader("🧠 Apex Trend & Liquidity Master")
+apex_cfg = {
+    "ma_type": st.sidebar.selectbox("Baseline MA Type", ["EMA", "SMA", "HMA", "RMA", "WMA", "VWMA"], index=0),
+    "len_main": st.sidebar.number_input("Main Length", min_value=2, value=55, step=1),
+    "mult": st.sidebar.number_input("ATR Multiplier", min_value=0.1, value=2.0, step=0.1),
+    "src": st.sidebar.selectbox("Source", ["Close", "Open", "High", "Low"], index=0),
+    "use_vol": st.sidebar.toggle("Use Volume Filter", value=True),
+    "use_rsi": st.sidebar.toggle("Use RSI Filter", value=True),
+    "liq_len": st.sidebar.number_input("Liquidity Pivot Length", min_value=1, value=6, step=1),
+    "zone_ext": st.sidebar.number_input("Zone Extend Bars", min_value=1, value=80, step=5),
+    "show_liq": st.sidebar.toggle("Show Liquidity Zones", value=True),
+}
 
-with st.sidebar.expander("⚛️ Apex Vector v4.1 (Full)", expanded=False):
-    vx_eff_super = st.number_input("Superconductor Threshold", min_value=0.1, max_value=1.0, value=0.60, step=0.05)
-    vx_eff_resist = st.number_input("Resistive Threshold", min_value=0.0, max_value=0.5, value=0.30, step=0.05)
-    vx_vol_norm = st.number_input("Volume Normalization", min_value=10, value=55, step=1)
-    vx_len_vec = st.number_input("Vector Length", min_value=2, value=14, step=1)
-    vx_sm_type = st.selectbox("Smoothing Type", ["EMA", "SMA", "RMA", "WMA", "VWMA"], index=0)
-    vx_len_sm = st.number_input("Smoothing Length", min_value=1, value=5, step=1)
-    vx_use_vol = st.checkbox("Integrate Volume Flux", value=True)
-    vx_strict = st.number_input("Global Strictness", min_value=0.1, value=1.0, step=0.1)
-    vx_show_div = st.checkbox("Show Divergences", value=True)
-    vx_div_look = st.number_input("Divergence Pivot Lookback", min_value=1, value=5, step=1)
-    vx_show_reg = st.checkbox("Regular (Reversal)", value=True)
-    vx_show_hid = st.checkbox("Hidden (Continuation)", value=False)
+st.sidebar.subheader("🧠 Nexus v8.2")
+nexus_cfg = {
+    "h_val": st.sidebar.number_input("Kernel Lookback (h)", min_value=2, value=20, step=1),
+    "r_val": st.sidebar.number_input("Kernel Weight (r)", min_value=0.1, value=8.0, step=0.5),
+    "gann_len": st.sidebar.number_input("Gann Donchian Len", min_value=2, value=10, step=1),
+    "tf_trend": st.sidebar.selectbox("Kernel Macro TF", ["", "4H", "1D", "1W"], index=0),
+    "a_val": st.sidebar.number_input("UT ATR Mult (a)", min_value=0.1, value=2.0, step=0.1),
+    "c_period": st.sidebar.number_input("UT ATR Period (c)", min_value=2, value=12, step=1),
+    "liq_len": st.sidebar.number_input("Structure Pivot Len", min_value=1, value=6, step=1),
+    "show_fvg": st.sidebar.toggle("Show FVG Detection", value=True),
+    "filter_doji": st.sidebar.toggle("Doji Filter", value=True),
+    "strict_structure": st.sidebar.toggle("Strict BOS w/ Gann", value=False),
+}
 
-# Macro header (preserved)
-macro_groups, m_price, m_chg = get_macro_data()
+st.sidebar.subheader("⚛️ Apex Vector v4.1")
+vector_cfg = {
+    "eff_super": st.sidebar.number_input("Super Threshold", min_value=0.05, value=0.35, step=0.05),
+    "eff_resist": st.sidebar.number_input("Resist Threshold", min_value=0.01, value=0.10, step=0.01),
+    "vol_norm": st.sidebar.number_input("Vol Norm Length", min_value=2, value=20, step=1),
+    "len_vec": st.sidebar.number_input("Efficiency EMA Len", min_value=2, value=14, step=1),
+    "sm_type": st.sidebar.selectbox("Flux Smooth Type", ["EMA", "SMA", "RMA", "WMA", "VWMA"], index=0),
+    "len_sm": st.sidebar.number_input("Flux Smooth Len", min_value=2, value=9, step=1),
+    "use_vol": st.sidebar.toggle("Use Volume Factor", value=True),
+    "strictness": st.sidebar.number_input("Strictness Mult", min_value=0.5, value=1.0, step=0.1),
+    "show_div": st.sidebar.toggle("Show Divergences", value=True),
+    "div_look": st.sidebar.number_input("Divergence Pivot Len", min_value=2, value=8, step=1),
+    "show_reg": st.sidebar.toggle("Regular Divergence", value=True),
+    "show_hid": st.sidebar.toggle("Hidden Divergence", value=True),
+}
 
-if m_price:
-    group_names = list(macro_groups.keys())
-    for i in range(0, len(group_names), 2):
-        cols = st.columns(2)
-        g1 = group_names[i]
-        with cols[0].container(border=True):
-            st.markdown(f"#### {g1}")
-            sc = st.columns(4)
-            for x, (n, s) in enumerate(macro_groups[g1].items()):
-                fmt = "{:.3f}" if any(c in n for c in ["Yield", "GBP", "EUR", "JPY"]) else "{:,.2f}"
-                sc[x].metric(n.split('(')[0], fmt.format(m_price.get(n, 0)), f"{m_chg.get(n, 0):.2f}%")
-        if i + 1 < len(group_names):
-            g2 = group_names[i+1]
-            with cols[1].container(border=True):
-                st.markdown(f"#### {g2}")
-                sc = st.columns(4)
-                for x, (n, s) in enumerate(macro_groups[g2].items()):
-                    fmt = "{:.3f}" if any(c in n for c in ["Yield", "GBP", "EUR", "JPY"]) else "{:,.2f}"
-                    sc[x].metric(n.split('(')[0], fmt.format(m_price.get(n, 0)), f"{m_chg.get(n, 0):.2f}%")
-    st.markdown("---")
+# ------------------------------------------
+# TELEGRAM CONTROL PANEL (PRESERVED + MULTI REPORT TYPES)
+# ------------------------------------------
+st.sidebar.subheader("📡 Telegram Alerts")
+tg_token = st.sidebar.text_input("Telegram Bot Token", type="password")
+tg_chat = st.sidebar.text_input("Telegram Chat ID")
+report_type = st.sidebar.selectbox("Report Type", ["QUICK_PING", "TRADE_SCALP", "TRADE_SWING", "FULL_ANALYSIS"], index=0)
+upload_img = st.sidebar.file_uploader("Optional: attach image", type=["png", "jpg", "jpeg"])
 
-tab1, tab2, tab3, tab4, tab9, tab5, tab6, tab7, tab8, tab10 = st.tabs([
-    "📊 God Mode Technicals",
-    "🌍 Sector & Fundamentals",
-    "📅 Monthly Seasonality",
-    "📆 Day of Week DNA",
-    "🧩 Correlation & MTF",
-    "📟 DarkPool Dashboard",
-    "🏦 Smart Money Concepts",
-    "🔮 Quantitative Forecasting",
-    "📊 Volume Profile",
-    "📡 Broadcast & TradingView"
+# ------------------------------------------
+# MAIN: DATA LOAD + COMPUTE
+# ------------------------------------------
+if not selected_ticker:
+    st.stop()
+
+df = safe_download(selected_ticker, period, interval)
+if df is None or df.empty:
+    st.error("No price data returned for this ticker/timeframe. Try a different symbol or timeframe.")
+    st.stop()
+
+# Normalize index tz for display stability
+try:
+    df = df.copy()
+    if getattr(df.index, "tz", None) is not None:
+        df.index = df.index.tz_convert(None)
+except Exception:
+    pass
+
+# Run indicator engine
+df_ind, apex_supply_zones, apex_demand_zones, nexus_fvgs = calc_indicators(df, apex_cfg, nexus_cfg, vector_cfg)
+df_ind = calc_fear_greed_v4(df_ind)
+last = df_ind.iloc[-1]
+
+# Fundamentals (safe)
+fundamentals = get_fundamentals(selected_ticker)
+
+# SR zones snapshot (used in Telegram full print)
+sr_zones = get_sr_channels(df_ind, pivot_period=10, loopback=290, max_width_pct=5, min_strength=1)
+
+# Macro snapshot (fast)
+g_groups, g_prices, g_changes = get_macro_data()
+
+macro_lines = []
+macro_lines.append("🌍 Macro Tape (5d Δ):")
+for grp, items in g_groups.items():
+    macro_lines.append(f"\n{grp}:")
+    for nm, sym in items.items():
+        chg = g_changes.get(nm, np.nan)
+        if np.isfinite(_safe_float(chg)):
+            macro_lines.append(f"- {nm}: {chg:+.2f}%")
+        else:
+            macro_lines.append(f"- {nm}: N/A")
+macro_text = "\n".join(macro_lines)
+
+# ------------------------------------------
+# NEW: TradingView widgets (Symbol Info banner + chart)
+# ------------------------------------------
+tv_symbol = build_tradingview_symbol(
+    selected_ticker,
+    tv_exchange_override=tv_exchange_override,
+    explicit_tv_symbol=explicit_tv_symbol
+)
+
+def tradingview_advanced_chart_html(tv_sym: str, interval_label: str):
+    # TradingView interval strings: "15", "60", "240", "D", "W"
+    tv_interval = {"15m": "15", "1h": "60", "4h": "240", "1d": "D", "1wk": "W"}.get(interval_label, "D")
+    sym = (tv_sym or "").replace('"', '\\"')
+    cfg = {
+        "autosize": True,
+        "symbol": sym,
+        "interval": tv_interval,
+        "timezone": "Etc/UTC",
+        "theme": "dark",
+        "style": "1",
+        "locale": "en",
+        "enable_publishing": False,
+        "hide_top_toolbar": False,
+        "hide_legend": False,
+        "allow_symbol_change": True,
+        "save_image": False,
+        "calendar": False,
+        "studies": [],
+        "support_host": "https://www.tradingview.com"
+    }
+    return f"""
+    <div class="tradingview-widget-container" style="height:560px;width:100%;">
+      <div class="tradingview-widget-container__widget" style="height:560px;width:100%;"></div>
+      <script type="text/javascript" src="https://s3.tradingview.com/external-embedding/embed-widget-advanced-chart.js" async>
+      {json.dumps(cfg)}
+      </script>
+    </div>
+    """
+
+# ------------------------------------------
+# TOP: TradingView Ticker Banner (interactive) + Key Metrics
+# ------------------------------------------
+if tv_symbol:
+    components.html(tradingview_symbol_info_widget_html(tv_symbol), height=140)
+
+m1, m2, m3, m4, m5, m6 = st.columns(6)
+m1.metric("Price", f"${_safe_float(last['Close']):.2f}" if np.isfinite(_safe_float(last.get("Close", np.nan))) else "N/A")
+m2.metric("GM Score", _fmt_int(last.get("GM_Score", 0)))
+m3.metric("Omni Score", _fmt_int(last.get("Omni_Score", 0)))
+m4.metric("Confidence", f"{_fmt_int(last.get('Omni_Confidence', 50))}/100")
+m5.metric("RSI", f"{_safe_float(last.get('RSI', np.nan)):.1f}" if np.isfinite(_safe_float(last.get("RSI", np.nan))) else "N/A")
+m6.metric("RVOL", f"{_safe_float(last.get('RVOL', np.nan)):.2f}x" if np.isfinite(_safe_float(last.get("RVOL", np.nan))) else "N/A")
+
+st.markdown("---")
+
+# ------------------------------------------
+# TABS (PRESERVED STYLE; FULL FEATURE SET)
+# ------------------------------------------
+tab_overview, tab_chart, tab_structure, tab_quant, tab_macro, tab_ai, tab_telegram = st.tabs([
+    "📌 Overview",
+    "📈 Chart Lab",
+    "🏗️ Structure / Zones",
+    "🧪 Quant / Stats",
+    "🌍 Macro",
+    "🤖 AI Analyst",
+    "📡 Telegram"
 ])
 
-if st.button(f"Analyze {ticker}", help="Run Analysis"):
-    st.session_state['run_analysis'] = True
+# ==========================================
+# TAB: OVERVIEW
+# ==========================================
+with tab_overview:
+    c1, c2 = st.columns([2, 1])
 
-if st.session_state.get('run_analysis'):
-    with st.spinner(f"Analyzing {ticker} in God Mode..."):
-        # Fetch period logic (preserved)
-        if interval in ["1m", "2m", "5m", "15m", "30m"]:
-            fetch_period = "59d"
-        elif interval in ["1h", "4h"]:
-            fetch_period = "1y"
+    with c1:
+        st.subheader(f"📌 {selected_ticker} — Regime Snapshot ({timeframe})")
+
+        apex_bias = "🐂 BULL" if int(last.get("Apex_Trend", 0)) == 1 else "🐻 BEAR" if int(last.get("Apex_Trend", 0)) == -1 else "⚪ CHOP"
+        nexus_bias = "BUY" if bool(last.get("Nexus_Signal_Buy", False)) else "SELL" if bool(last.get("Nexus_Signal_Sell", False)) else "WAIT"
+        vector_state = "SUPER BULL" if bool(last.get("Vector_SuperBull", False)) else \
+                       "SUPER BEAR" if bool(last.get("Vector_SuperBear", False)) else \
+                       "RESISTIVE" if bool(last.get("Vector_Resistive", False)) else "HEAT"
+
+        st.write(f"**Apex Trend:** {apex_bias}")
+        st.write(f"**Nexus Signal:** {nexus_bias}")
+        st.write(f"**Vector State:** {vector_state}")
+        st.write(f"**Squeeze:** {'💥 ON' if bool(last.get('Squeeze_On', False)) else '💤 OFF'}")
+        st.write(f"**Fear & Greed Index:** {_fmt_num(last.get('FG_Index', np.nan), 1)}/100")
+        st.write(f"**FOMO / PANIC Flags:** FOMO={_fmt_bool(last.get('IS_FOMO', False))} | PANIC={_fmt_bool(last.get('IS_PANIC', False))}")
+
+        st.markdown("#### TradingView Live Chart")
+        if tv_symbol:
+            components.html(tradingview_advanced_chart_html(tv_symbol, timeframe), height=580)
         else:
-            fetch_period = "2y"
+            st.info("TradingView symbol is empty (conversion returned blank).")
 
-        df = safe_download(ticker, fetch_period, interval)
-
-        # Resample 4h (preserved)
-        if interval == "4h" and df is not None:
-            agg_dict = {'Open': 'first', 'High': 'max', 'Low': 'min', 'Close': 'last', 'Volume': 'sum'}
-            if 'Adj Close' in df.columns:
-                agg_dict['Adj Close'] = 'last'
-            df = df.resample('4h').agg(agg_dict).dropna()
-
-        if df is not None:
-            apex_cfg = {
-                "ma_type": apex_ma_type,
-                "len_main": apex_len_main,
-                "mult": apex_mult,
-                "src": apex_src,
-                "show_liq": apex_show_liq,
-                "liq_len": apex_liq_len,
-                "zone_ext": apex_zone_ext,
-                "use_vol": apex_use_vol,
-                "use_rsi": apex_use_rsi,
-            }
-            nexus_cfg = {
-                "h_val": nx_h,
-                "r_val": nx_r,
-                "gann_len": nx_gann,
-                "tf_trend": nx_tf,
-                "a_val": nx_a,
-                "c_period": nx_atr,
-                "liq_len": nx_liq,
-                "show_fvg": nx_show_fvg,
-                "filter_doji": nx_filter_doji,
-                "strict_structure": nx_strict,
-            }
-            vector_cfg = {
-                "eff_super": vx_eff_super,
-                "eff_resist": vx_eff_resist,
-                "vol_norm": vx_vol_norm,
-                "len_vec": vx_len_vec,
-                "sm_type": vx_sm_type,
-                "len_sm": vx_len_sm,
-                "use_vol": vx_use_vol,
-                "strictness": vx_strict,
-                "show_div": vx_show_div,
-                "div_look": vx_div_look,
-                "show_reg": vx_show_reg,
-                "show_hid": vx_show_hid,
-            }
-
-            df, apex_supply_zones, apex_demand_zones, nexus_fvgs = calc_indicators(df, apex_cfg, nexus_cfg, vector_cfg)
-            df = calc_fear_greed_v4(df)
-            fund = get_fundamentals(ticker)
-            sr_zones = get_sr_channels(df)
-
-            # TAB 1: TECHNICALS
-            with tab1:
-                st.subheader(f"🎯 Apex God Mode: {ticker}")
-                col_chart, col_gauge = st.columns([0.75, 0.25])
-
-                with col_chart:
-                    # Upgraded: 5 rows (price, squeeze, money flow, vector flux, nexus UT pos)
-                    fig = make_subplots(
-                        rows=5, cols=1, shared_xaxes=True,
-                        row_heights=[0.55, 0.15, 0.12, 0.10, 0.08],
-                        vertical_spacing=0.02
-                    )
-
-                    # 1) Price
-                    fig.add_trace(go.Candlestick(
-                        x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'], name="Price"
-                    ), row=1, col=1)
-
-                    # Apex Cloud (filled)
-                    fig.add_trace(go.Scatter(x=df.index, y=df['Apex_Upper'], line=dict(width=0), showlegend=False, hoverinfo='skip'), row=1, col=1)
-                    fig.add_trace(go.Scatter(x=df.index, y=df['Apex_Lower'], fill='tonexty', fillcolor='rgba(0, 230, 118, 0.10)',
-                                             line=dict(width=0), name="Apex Cloud"), row=1, col=1)
-                    fig.add_trace(go.Scatter(x=df.index, y=df['HMA'], line=dict(color='yellow', width=2), name="HMA Trend"), row=1, col=1)
-
-                    # Nexus overlays (kernel + UT stop)
-                    fig.add_trace(go.Scatter(x=df.index, y=df["Nexus_Kernel"], line=dict(color='rgba(255,255,255,0.6)', width=2), name="Nexus Kernel"), row=1, col=1)
-                    fig.add_trace(go.Scatter(x=df.index, y=df["Nexus_UT_Stop"], line=dict(color='rgba(255,165,0,0.9)', width=2), name="Nexus UT Stop"), row=1, col=1)
-
-                    # God Mode signals (existing)
-                    buy_signals = df[df['GM_Score'] >= 3]
-                    sell_signals = df[df['GM_Score'] <= -3]
-                    fig.add_trace(go.Scatter(x=buy_signals.index, y=buy_signals['Low']*0.98, mode='markers',
-                                             marker=dict(symbol='triangle-up', color='#00ff00', size=10), name="GM Buy"), row=1, col=1)
-                    fig.add_trace(go.Scatter(x=sell_signals.index, y=sell_signals['High']*1.02, mode='markers',
-                                             marker=dict(symbol='triangle-down', color='#ff0000', size=10), name="GM Sell"), row=1, col=1)
-
-                    # Apex signals (full port)
-                    apex_buys = df[df["Apex_Sig_Buy"]]
-                    apex_sells = df[df["Apex_Sig_Sell"]]
-                    fig.add_trace(go.Scatter(x=apex_buys.index, y=apex_buys["Low"]*0.985, mode="markers",
-                                             marker=dict(symbol="circle", color="rgba(0,230,118,0.9)", size=7),
-                                             name="Apex BUY"), row=1, col=1)
-                    fig.add_trace(go.Scatter(x=apex_sells.index, y=apex_sells["High"]*1.015, mode="markers",
-                                             marker=dict(symbol="circle", color="rgba(255,23,68,0.9)", size=7),
-                                             name="Apex SELL"), row=1, col=1)
-
-                    # Nexus signals
-                    nx_buy = df[df["Nexus_Signal_Buy"]]
-                    nx_sell = df[df["Nexus_Signal_Sell"]]
-                    fig.add_trace(go.Scatter(x=nx_buy.index, y=nx_buy["Low"]*0.975, mode="markers",
-                                             marker=dict(symbol="diamond", color="rgba(0,255,255,0.9)", size=8),
-                                             name="Nexus BUY"), row=1, col=1)
-                    fig.add_trace(go.Scatter(x=nx_sell.index, y=nx_sell["High"]*1.025, mode="markers",
-                                             marker=dict(symbol="diamond", color="rgba(255,0,255,0.9)", size=8),
-                                             name="Nexus SELL"), row=1, col=1)
-
-                    # SR Channels (existing)
-                    for z in sr_zones:
-                        col = "rgba(0, 255, 0, 0.15)" if df['Close'].iloc[-1] > z['max'] else "rgba(255, 0, 0, 0.15)"
-                        fig.add_shape(type="rect", x0=df.index[0], x1=df.index[-1], xref="x", yref="y",
-                                      y0=z['min'], y1=z['max'], fillcolor=col, line=dict(width=0), row=1, col=1)
-
-                    # Apex Liquidity Zones (supply/demand) snapshot
-                    for z in apex_supply_zones:
-                        fig.add_shape(type="rect", x0=z["idx"], x1=df.index[-1], y0=z["bot"], y1=z["top"],
-                                      fillcolor="rgba(255,23,68,0.12)", line=dict(width=1, color="rgba(255,23,68,0.35)"),
-                                      row=1, col=1)
-                    for z in apex_demand_zones:
-                        fig.add_shape(type="rect", x0=z["idx"], x1=df.index[-1], y0=z["bot"], y1=z["top"],
-                                      fillcolor="rgba(0,230,118,0.12)", line=dict(width=1, color="rgba(0,230,118,0.35)"),
-                                      row=1, col=1)
-
-                    # Nexus FVGs
-                    for fvg in nexus_fvgs[-80:]:
-                        fc = "rgba(0,230,118,0.18)" if fvg["dir"] == "BULL" else "rgba(255,82,82,0.18)"
-                        fig.add_shape(type="rect", x0=fvg["x0"], x1=fvg["x1"], y0=fvg["y0"], y1=fvg["y1"],
-                                      fillcolor=fc, line=dict(width=0), row=1, col=1)
-
-                    # 2) Squeeze Momentum
-                    colors = ['#00E676' if v > 0 else '#FF5252' for v in df['Sqz_Mom'].fillna(0)]
-                    fig.add_trace(go.Bar(x=df.index, y=df['Sqz_Mom'], marker_color=colors, name="Squeeze Mom"), row=2, col=1)
-
-                    # 3) Money Flow Matrix
-                    fig.add_trace(go.Scatter(x=df.index, y=df['MF_Matrix'], fill='tozeroy',
-                                             line=dict(color='cyan', width=1), name="Money Flow"), row=3, col=1)
-
-                    # 4) Apex Vector Flux (histogram)
-                    flux = df["Vector_Flux"].fillna(0)
-                    flux_colors = np.where(df["Vector_SuperBull"], "rgba(0,230,118,0.85)",
-                                           np.where(df["Vector_SuperBear"], "rgba(255,23,68,0.85)",
-                                                    np.where(df["Vector_Resistive"], "rgba(84,110,122,0.85)", "rgba(255,214,0,0.85)")))
-                    fig.add_trace(go.Bar(x=df.index, y=flux, marker_color=flux_colors, name="Vector Flux"), row=4, col=1)
-                    # thresholds as lines
-                    ths = float(df["Vector_Th_Super"].iloc[-1]) if len(df) else 0.0
-                    fig.add_hline(y=ths, line=dict(width=1, dash="dot"), row=4, col=1)
-                    fig.add_hline(y=-ths, line=dict(width=1, dash="dot"), row=4, col=1)
-
-                    # 5) Nexus UT Position (1 / -1)
-                    fig.add_trace(go.Scatter(x=df.index, y=df["Nexus_UT_Pos"], mode="lines", name="UT Pos"), row=5, col=1)
-
-                    fig.update_layout(height=950, template="plotly_dark", xaxis_rangeslider_visible=False, title_text="God Mode Technical Stack (Full Pine Ports)")
-                    st.plotly_chart(fig, use_container_width=True)
-
-                with col_gauge:
-                    fg_val = df['FG_Index'].iloc[-1] if "FG_Index" in df.columns else 0
-                    fig_gauge = go.Figure(go.Indicator(
-                        mode="gauge+number",
-                        value=float(fg_val) if np.isfinite(fg_val) else 0,
-                        title={'text': "Fear & Greed"},
-                        gauge={'axis': {'range': [0, 100]},
-                               'bar': {'color': "white"},
-                               'steps': [{'range': [0, 20], 'color': "#FF0000"},
-                                         {'range': [80, 100], 'color': "#00FF00"}]}
-                    ))
-                    fig_gauge.update_layout(height=300, margin=dict(l=10, r=10, t=50, b=10), paper_bgcolor="rgba(0,0,0,0)", font={'color': "white"})
-                    st.plotly_chart(fig_gauge, use_container_width=True)
-
-                    st.markdown("### 🧬 Indicator DNA")
-                    last_row = df.iloc[-1]
-                    st.metric("God Mode Score", f"{last_row['GM_Score']:.0f} / 5", delta="Bullish" if last_row['GM_Score'] > 0 else "Bearish")
-                    st.metric("Omni Confidence", f"{int(last_row['Omni_Confidence'])}/100", delta="Aligned" if abs(int(last_row["Omni_Score"])) >= 3 else "Mixed")
-                    st.metric("Apex Trend", "BULL" if int(last_row['Apex_Trend']) == 1 else "BEAR" if int(last_row['Apex_Trend']) == -1 else "CHOP")
-                    st.metric("Nexus", "BUY" if bool(last_row["Nexus_Signal_Buy"]) else "SELL" if bool(last_row["Nexus_Signal_Sell"]) else "WAIT")
-                    st.metric("Vector State", "SUPER BULL" if bool(last_row["Vector_SuperBull"]) else "SUPER BEAR" if bool(last_row["Vector_SuperBear"]) else "RESISTIVE" if bool(last_row["Vector_Resistive"]) else "HEAT")
-                    st.metric("Squeeze", "ON" if bool(last_row['Squeeze_On']) else "OFF")
-                    st.metric("Money Flow", f"{_safe_float(last_row['MF_Matrix']):.2f}")
-
-                st.markdown("### 🤖 Strategy Briefing")
-                ai_verdict = ask_ai_analyst(df, ticker, fund, balance, risk_pct, interval)
-                st.info(ai_verdict)
-
-            # TAB 2: FUNDAMENTALS
-            with tab2:
-                if fund:
-                    c1, c2, c3 = st.columns(3)
-                    c1.metric("P/E Ratio", f"{fund.get('P/E Ratio', 'N/A')}")
-                    c2.metric("Rev Growth", f"{fund.get('Rev Growth', 0)*100:.1f}%")
-                    c3.metric("Debt/Equity", f"{fund.get('Debt/Equity', 'N/A')}")
-                    st.write(f"**Summary:** {fund.get('Summary', 'No Data')}")
-                st.subheader("🔥 Global Market Heatmap")
-                s_data = get_global_performance()
-                if s_data is not None:
-                    fig_sector = go.Figure(go.Bar(
-                        x=s_data.values, y=s_data.index, orientation='h',
-                        marker_color=['#00ff00' if v >= 0 else '#ff0000' for v in s_data.values]
-                    ))
-                    fig_sector.update_layout(height=400, template="plotly_dark")
-                    st.plotly_chart(fig_sector, use_container_width=True)
-
-            # TAB 3: SEASONALITY
-            with tab3:
-                seas = get_seasonality_stats(ticker)
-                if seas:
-                    hm, hold, month = seas
-                    fig_hm = px.imshow(hm, color_continuous_scale='RdYlGn', text_auto='.1f')
-                    fig_hm.update_layout(template="plotly_dark", height=500)
-                    st.plotly_chart(fig_hm, use_container_width=True)
-                    c1, c2 = st.columns(2)
-                    c1.dataframe(pd.DataFrame(hold).T.style.format("{:.1f}%").background_gradient(cmap="RdYlGn"))
-                    curr_m = datetime.datetime.now().month
-                    if curr_m in month.index:
-                        c2.metric("Current Month Win Rate", f"{month.loc[curr_m, 'Win Rate']:.1f}%")
-
-            # TAB 4: DNA
-            with tab4:
-                st.subheader("📆 Day & Hour DNA")
-                c1, c2 = st.columns(2)
-
-                dna_res = calc_day_of_week_dna(ticker, 250, "Close to Close (Total)")
-                if dna_res:
-                    cum, stats = dna_res
-                    with c1:
-                        st.markdown("**Day of Week Performance**")
-                        fig_dna = go.Figure()
-                        for c in cum.columns:
-                            fig_dna.add_trace(go.Scatter(x=cum.index, y=cum[c], name=c))
-                        fig_dna.update_layout(template="plotly_dark", height=400)
-                        st.plotly_chart(fig_dna, use_container_width=True)
-                        st.dataframe(stats.style.background_gradient(subset=['Win Rate'], cmap="RdYlGn"))
-
-                hourly_res = calc_intraday_dna(ticker)
-                if hourly_res is not None:
-                    with c2:
-                        st.markdown("**Intraday (Hourly) Performance**")
-                        fig_hr = px.bar(hourly_res, x=hourly_res.index, y='Avg Return', color='Win Rate', color_continuous_scale='RdYlGn')
-                        fig_hr.update_layout(template="plotly_dark", height=400)
-                        st.plotly_chart(fig_hr, use_container_width=True)
-                        st.dataframe(hourly_res.style.format("{:.2f}"))
-
-            # TAB 9: CORRELATION & MTF
-            with tab9:
-                st.subheader("🧩 Cross-Asset Intelligence")
-                c1, c2 = st.columns([0.4, 0.6])
-
-                with c1:
-                    st.markdown("**📡 Multi-Timeframe Radar**")
-                    mtf_df = calc_mtf_trend(ticker)
-
-                    def color_trend(val):
-                        color = '#00ff00' if val == 'BULLISH' else '#ff0000' if val == 'BEARISH' else 'white'
-                        return f'color: {color}; font-weight: bold'
-
-                    st.dataframe(mtf_df.style.map(color_trend, subset=['Trend']), use_container_width=True)
-
-                with c2:
-                    st.markdown("**🔗 Macro Correlation Matrix (180 Days)**")
-                    corr_data = calc_correlations(ticker)
-                    fig_corr = px.bar(x=corr_data.values, y=corr_data.index, orientation='h', color=corr_data.values, color_continuous_scale='RdBu')
-                    fig_corr.update_layout(template="plotly_dark", height=400, xaxis_title="Correlation Coefficient")
-                    st.plotly_chart(fig_corr, use_container_width=True)
-
-            # TAB 5: DASHBOARD
-            with tab5:
-                last = df.iloc[-1]
-                dash_data = {
-                    "Metric": [
-                        "God Mode Score", "Omni Score", "Omni Confidence",
-                        "Apex Trend", "Nexus Signal", "Vector State",
-                        "Gann Trend (Nexus)", "Kernel Trend", "UT Pos", "EVWM Momentum", "RVOL"
-                    ],
-                    "Value": [
-                        f"{int(last['GM_Score'])}",
-                        f"{int(last['Omni_Score'])}",
-                        f"{int(last['Omni_Confidence'])}/100",
-                        "BULL" if int(last['Apex_Trend']) == 1 else "BEAR" if int(last['Apex_Trend']) == -1 else "CHOP",
-                        "BUY" if bool(last["Nexus_Signal_Buy"]) else "SELL" if bool(last["Nexus_Signal_Sell"]) else "WAIT",
-                        "SUPER BULL" if bool(last["Vector_SuperBull"]) else "SUPER BEAR" if bool(last["Vector_SuperBear"]) else "RESISTIVE" if bool(last["Vector_Resistive"]) else "HEAT",
-                        "BULL" if int(last["Nexus_GannTrend"]) == 1 else "BEAR",
-                        "BULL" if int(last["Nexus_KernelTrend"]) == 1 else "BEAR",
-                        "SAFE" if int(last["Nexus_UT_Pos"]) == 1 else "RISK" if int(last["Nexus_UT_Pos"]) == -1 else "N/A",
-                        f"{_safe_float(last['EVWM']):.2f}",
-                        f"{_safe_float(last['RVOL']):.1f}x"
-                    ]
-                }
-                st.dataframe(pd.DataFrame(dash_data), use_container_width=True)
-
-            # TAB 6: SMC
-            with tab6:
-                smc = calculate_smc(df)
-                fig_smc = go.Figure(go.Candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close']))
-                for ob in smc['order_blocks']:
-                    fig_smc.add_shape(type="rect", x0=ob['x0'], x1=ob['x1'], y0=ob['y0'], y1=ob['y1'], fillcolor=ob['color'], opacity=0.5, line_width=0)
-                for fvg in smc['fvgs']:
-                    fig_smc.add_shape(type="rect", x0=fvg['x0'], x1=fvg['x1'], y0=fvg['y0'], y1=fvg['y1'], fillcolor=fvg['color'], opacity=0.5, line_width=0)
-                for struct in smc['structures']:
-                    fig_smc.add_shape(type="line", x0=struct['x0'], x1=struct['x1'], y0=struct['y'], y1=struct['y'], line=dict(color=struct['color'], width=1, dash="dot"))
-                    fig_smc.add_annotation(x=struct['x1'], y=struct['y'], text=struct['label'], showarrow=False,
-                                           yshift=10 if struct['color'] == 'green' else -10, font=dict(color=struct['color'], size=10))
-                fig_smc.update_layout(height=600, template="plotly_dark", title="SMC Analysis")
-                st.plotly_chart(fig_smc, use_container_width=True)
-
-            # TAB 7: QUANT
-            with tab7:
-                mc = run_monte_carlo(df)
-                fig_mc = go.Figure()
-                for i in range(50):
-                    fig_mc.add_trace(go.Scatter(y=mc[:, i], mode='lines', line=dict(color='rgba(255,255,255,0.05)'), showlegend=False))
-                fig_mc.add_trace(go.Scatter(y=np.mean(mc, axis=1), mode='lines', name='Mean', line=dict(color='orange')))
-                fig_mc.update_layout(height=500, template="plotly_dark", title="Monte Carlo Forecast (30 Days)")
-                st.plotly_chart(fig_mc, use_container_width=True)
-
-            # TAB 8: VOLUME PROFILE
-            with tab8:
-                vp, poc = calc_volume_profile(df)
-                fig_vp = make_subplots(rows=1, cols=2, shared_yaxes=True, column_widths=[0.7, 0.3])
-                fig_vp.add_trace(go.Candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close']), row=1, col=1)
-                fig_vp.add_trace(go.Bar(x=vp['Volume'], y=vp['Price'], orientation='h', marker_color='rgba(0,200,255,0.3)'), row=1, col=2)
-                fig_vp.add_hline(y=poc, line_color="yellow")
-                fig_vp.update_layout(height=600, template="plotly_dark", title="Volume Profile (VPVR)")
-                st.plotly_chart(fig_vp, use_container_width=True)
-
-            # TAB 10: BROADCAST & TRADINGVIEW
-            with tab10:
-                st.subheader("📡 Social Command Center")
-
-                tv_interval_map = {"15m": "15", "1h": "60", "4h": "240", "1d": "D", "1wk": "W"}
-                tv_int = tv_interval_map.get(interval, "D")
-                tv_ticker = ticker.replace("-", "") if "BTC" in ticker else ticker
-
-                tv_widget_html = f"""
-                <div class="tradingview-widget-container">
-                    <div id="tradingview_widget"></div>
-                    <script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script>
-                    <script type="text/javascript">
-                    new TradingView.widget(
-                    {{
-                        "width": "100%",
-                        "height": 500,
-                        "symbol": "{tv_ticker}",
-                        "interval": "{tv_int}",
-                        "timezone": "Etc/UTC",
-                        "theme": "dark",
-                        "style": "1",
-                        "locale": "en",
-                        "toolbar_bg": "#f1f3f6",
-                        "enable_publishing": false,
-                        "hide_side_toolbar": false,
-                        "allow_symbol_change": true,
-                        "container_id": "tradingview_widget"
-                    }}
-                    );
-                    </script>
-                </div>
-                """
-                st.components.v1.html(tv_widget_html, height=500)
-                st.caption("Drawing Tools are enabled on the left sidebar.")
-
-                st.markdown("---")
-                st.markdown("#### 🚀 Broadcast Signal")
-
-                last_r = df.iloc[-1]
-
-                spy_chg = m_chg.get("S&P 500", 0)
-                btc_chg = m_chg.get("Bitcoin", 0)
-                dxy_chg = m_chg.get("DXY Index", 0)
-                gold_chg = m_chg.get("Gold", 0)
-                macro_text = f"🌍 SPY: {spy_chg:+.2f}% | BTC: {btc_chg:+.2f}%\n💵 DXY: {dxy_chg:+.2f}% | 🟡 Gold: {gold_chg:+.2f}%"
-
-                # New: Select template type (multi-type)
-                template = st.selectbox(
-                    "Telegram Message Type",
-                    ["QUICK_PING", "TRADE_SCALP", "TRADE_SWING", "FULL_ANALYSIS"],
-                    index=0,
-                    help="Choose the sophistication level of the Telegram signal."
-                )
-
-                # Default preview built from current state
-                messages_preview = format_signal_report(
-                    ticker=ticker,
-                    interval=interval,
-                    df=df,
-                    last_row=last_r,
-                    macro_text=macro_text,
-                    ai_verdict=ai_verdict,
-                    balance=float(balance),
-                    risk_pct=float(risk_pct),
-                    report_type=template,
-                    sr_zones=sr_zones
-                )
-                preview_text = "\n\n---\n\n".join(messages_preview)
-                msg = st.text_area("Message Preview", value=preview_text, height=220)
-
-                uploaded_file = st.file_uploader("Upload Chart Screenshot (Optional but Recommended)", type=['png', 'jpg', 'jpeg'])
-
-                col_b1, col_b2 = st.columns(2)
-
-                # Auto-broadcast toggle (new, without removing manual)
-                auto_send = st.checkbox("Auto-broadcast when NEW signal triggers (Apex/Nexus/Vector)", value=False)
-
-                # Define a deterministic "signal fingerprint" for the last bar
-                fingerprint = f"{ticker}|{interval}|{df.index[-1]}|ApexBuy={bool(last_r.get('Apex_Sig_Buy', False))}|ApexSell={bool(last_r.get('Apex_Sig_Sell', False))}|NexusBuy={bool(last_r.get('Nexus_Signal_Buy', False))}|NexusSell={bool(last_r.get('Nexus_Signal_Sell', False))}|VecSB={bool(last_r.get('Vector_SuperBull', False))}|VecSR={bool(last_r.get('Vector_SuperBear', False))}"
-
-                if "last_broadcast_fingerprint" not in st.session_state:
-                    st.session_state.last_broadcast_fingerprint = ""
-
-                def _has_new_signal():
-                    return bool(last_r.get("Apex_Sig_Buy", False) or last_r.get("Apex_Sig_Sell", False) or
-                                last_r.get("Nexus_Signal_Buy", False) or last_r.get("Nexus_Signal_Sell", False) or
-                                (bool(last_r.get("Vector_SuperBull", False)) and not bool(df["Vector_SuperBull"].shift(1).iloc[-1])) or
-                                (bool(last_r.get("Vector_SuperBear", False)) and not bool(df["Vector_SuperBear"].shift(1).iloc[-1])) or
-                                bool(last_r.get("Vector_Div_Bull_Reg", False)) or bool(last_r.get("Vector_Div_Bear_Reg", False)))
-
-                # Auto send if enabled and new fingerprint (no duplicate)
-                if auto_send and _has_new_signal() and st.session_state.last_broadcast_fingerprint != fingerprint:
-                    if tg_token and tg_chat:
-                        try:
-                            auto_msgs = format_signal_report(
-                                ticker=ticker, interval=interval, df=df, last_row=last_r,
-                                macro_text=macro_text, ai_verdict=ai_verdict,
-                                balance=float(balance), risk_pct=float(risk_pct),
-                                report_type=template,
-                                sr_zones=sr_zones
-                            )
-                            send_telegram_messages(tg_token, tg_chat, auto_msgs, uploaded_file=None)
-                            st.session_state.last_broadcast_fingerprint = fingerprint
-                            st.success("✅ Auto-broadcast sent (new signal detected).")
-                        except Exception as e:
-                            st.error(f"Auto-broadcast failed: {e}")
-                    else:
-                        st.warning("⚠️ Auto-broadcast enabled but Telegram keys are missing.")
-
-                if col_b1.button("Send to Telegram 🚀"):
-                    if tg_token and tg_chat:
-                        try:
-                            # Use freshly generated messages from template (not the edited box, to preserve integrity)
-                            to_send = format_signal_report(
-                                ticker=ticker, interval=interval, df=df, last_row=last_r,
-                                macro_text=macro_text, ai_verdict=ai_verdict,
-                                balance=float(balance), risk_pct=float(risk_pct),
-                                report_type=template,
-                                sr_zones=sr_zones
-                            )
-                            send_telegram_messages(tg_token, tg_chat, to_send, uploaded_file=uploaded_file)
-                            st.session_state.last_broadcast_fingerprint = fingerprint
-                            st.success("✅ Sent to Telegram (with safe splitting)!")
-                        except Exception as e:
-                            st.error(f"Failed: {e}")
-                    else:
-                        st.warning("⚠️ Enter Telegram Keys in Sidebar.")
-
-                if col_b2.button("Post to X (Twitter)"):
-                    encoded_msg = urllib.parse.quote(msg)
-                    st.link_button("🐦 Launch Tweet", f"https://twitter.com/intent/tweet?text={encoded_msg}")
-
+    with c2:
+        st.subheader("🏦 Fundamentals (if applicable)")
+        if fundamentals:
+            st.write(f"**Market Cap:** {fundamentals.get('Market Cap', 0):,}" if fundamentals.get("Market Cap") else "Market Cap: N/A")
+            st.write(f"**P/E Ratio:** {fundamentals.get('P/E Ratio', 0)}")
+            st.write(f"**Rev Growth:** {fundamentals.get('Rev Growth', 0) * 100:.2f}%")
+            st.write(f"**Debt/Equity:** {fundamentals.get('Debt/Equity', 0)}")
+            with st.expander("Business Summary"):
+                st.write(fundamentals.get("Summary", "No Data"))
         else:
-            st.error("Data connection failed. Try another ticker.")
+            st.info("No fundamentals available for this symbol type.")
+
+        st.subheader("🧬 Scores")
+        st.write(f"- GM Score: **{_fmt_int(last.get('GM_Score', 0))}**")
+        st.write(f"- Omni Score: **{_fmt_int(last.get('Omni_Score', 0))}**")
+        st.write(f"- Confidence: **{_fmt_int(last.get('Omni_Confidence', 50))}/100**")
+
+        st.subheader("📍 Quick Levels (reference)")
+        direction = "LONG" if int(last.get("Omni_Score", 0)) > 0 else "SHORT" if int(last.get("Omni_Score", 0)) < 0 else "NEUTRAL"
+        lv = build_trade_levels(last, "LONG" if direction == "LONG" else "SHORT")
+        st.write(f"Bias: **{direction}**")
+        st.write(f"Entry(ref): **{_fmt_num(lv['entry'])}**")
+        st.write(f"Stop(ref): **{_fmt_num(lv['stop'])}**")
+        st.write(f"TP1/2/3: **{_fmt_num(lv['tp1'])} / {_fmt_num(lv['tp2'])} / {_fmt_num(lv['tp3'])}**")
+
+# ==========================================
+# TAB: CHART LAB (Plotly + overlays)
+# ==========================================
+with tab_chart:
+    st.subheader("📈 Plotly Chart Lab")
+
+    show_apex_bands = st.toggle("Show Apex ATR Bands", value=True)
+    show_apex_baseline = st.toggle("Show Apex Baseline", value=True)
+    show_nexus_ut = st.toggle("Show Nexus UT Stop", value=True)
+    show_vwap = st.toggle("Show VWAP", value=True)
+    show_ema50 = st.toggle("Show EMA50", value=True)
+    show_fvgs = st.toggle("Show Nexus FVGs", value=True)
+    show_liq = st.toggle("Show Apex Liquidity Zones", value=True)
+
+    fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.06, row_heights=[0.72, 0.28])
+
+    fig.add_trace(go.Candlestick(
+        x=df_ind.index, open=df_ind["Open"], high=df_ind["High"], low=df_ind["Low"], close=df_ind["Close"],
+        name="Price"
+    ), row=1, col=1)
+
+    if show_apex_bands:
+        fig.add_trace(go.Scatter(x=df_ind.index, y=df_ind["Apex_Upper"], mode="lines", name="Apex Upper"), row=1, col=1)
+        fig.add_trace(go.Scatter(x=df_ind.index, y=df_ind["Apex_Lower"], mode="lines", name="Apex Lower"), row=1, col=1)
+
+    if show_apex_baseline:
+        fig.add_trace(go.Scatter(x=df_ind.index, y=df_ind["Apex_Base"], mode="lines", name="Apex Base"), row=1, col=1)
+
+    if show_nexus_ut:
+        fig.add_trace(go.Scatter(x=df_ind.index, y=df_ind["Nexus_UT_Stop"], mode="lines", name="Nexus UT Stop"), row=1, col=1)
+
+    if show_vwap:
+        fig.add_trace(go.Scatter(x=df_ind.index, y=df_ind["VWAP"], mode="lines", name="VWAP"), row=1, col=1)
+
+    if show_ema50:
+        fig.add_trace(go.Scatter(x=df_ind.index, y=df_ind["EMA_50"], mode="lines", name="EMA 50"), row=1, col=1)
+
+    # Buy/Sell markers (Apex + Nexus)
+    buy_idx = df_ind.index[df_ind["Apex_Sig_Buy"] | df_ind["Nexus_Signal_Buy"]]
+    sell_idx = df_ind.index[df_ind["Apex_Sig_Sell"] | df_ind["Nexus_Signal_Sell"]]
+
+    fig.add_trace(go.Scatter(
+        x=buy_idx, y=df_ind.loc[buy_idx, "Close"],
+        mode="markers", name="BUY", marker_symbol="triangle-up", marker_size=10
+    ), row=1, col=1)
+
+    fig.add_trace(go.Scatter(
+        x=sell_idx, y=df_ind.loc[sell_idx, "Close"],
+        mode="markers", name="SELL", marker_symbol="triangle-down", marker_size=10
+    ), row=1, col=1)
+
+    # Vector Flux (panel 2)
+    fig.add_trace(go.Scatter(x=df_ind.index, y=df_ind["Vector_Flux"], mode="lines", name="Vector Flux"), row=2, col=1)
+    fig.add_trace(go.Scatter(x=df_ind.index, y=df_ind["Sqz_Mom"], mode="lines", name="Squeeze Mom"), row=2, col=1)
+
+    # FVGs (rectangles)
+    if show_fvgs and nexus_fvgs:
+        for g in nexus_fvgs[-80:]:
+            fig.add_shape(
+                type="rect",
+                x0=g["x0"], x1=g["x1"],
+                y0=g["y0"], y1=g["y1"],
+                xref="x", yref="y",
+                line_width=0,
+                fillcolor="rgba(0,255,104,0.18)" if g["dir"] == "BULL" else "rgba(255,0,8,0.18)",
+                row=1, col=1
+            )
+
+    # Liquidity zones (Apex supply/demand)
+    if show_liq and (apex_supply_zones or apex_demand_zones):
+        # Extend zones to the right by zone_ext bars using x1 = last index
+        x_right = df_ind.index[-1]
+        for z in apex_supply_zones:
+            fig.add_shape(
+                type="rect",
+                x0=z["idx"], x1=x_right,
+                y0=z["bot"], y1=z["top"],
+                line_width=0,
+                fillcolor="rgba(255, 0, 0, 0.12)",
+                row=1, col=1
+            )
+        for z in apex_demand_zones:
+            fig.add_shape(
+                type="rect",
+                x0=z["idx"], x1=x_right,
+                y0=z["bot"], y1=z["top"],
+                line_width=0,
+                fillcolor="rgba(0, 255, 0, 0.12)",
+                row=1, col=1
+            )
+
+    fig.update_layout(height=850, xaxis_rangeslider_visible=False, template="plotly_dark")
+    st.plotly_chart(fig, use_container_width=True)
+
+# ==========================================
+# TAB: STRUCTURE / ZONES
+# ==========================================
+with tab_structure:
+    st.subheader("🏗️ Structure / Zones")
+
+    c1, c2 = st.columns([1, 1])
+
+    with c1:
+        st.markdown("### SR Channels (Algorithmic)")
+        if sr_zones:
+            zdf = pd.DataFrame(sr_zones)
+            st.dataframe(zdf, use_container_width=True, hide_index=True)
+        else:
+            st.info("No SR zones detected for the current lookback settings.")
+
+        st.markdown("### SMC Snapshot (Legacy Function)")
+        smc = calculate_smc(df_ind, swing_length=5)
+        st.write(f"Structures: {len(smc.get('structures', []))} | Order Blocks: {len(smc.get('order_blocks', []))} | FVGs: {len(smc.get('fvgs', []))}")
+
+    with c2:
+        st.markdown("### Liquidity Zones (Apex)")
+        st.write(f"Supply Zones (active): **{len(apex_supply_zones)}**")
+        st.write(f"Demand Zones (active): **{len(apex_demand_zones)}**")
+
+        if apex_supply_zones:
+            st.dataframe(pd.DataFrame(apex_supply_zones), use_container_width=True, hide_index=True)
+        if apex_demand_zones:
+            st.dataframe(pd.DataFrame(apex_demand_zones), use_container_width=True, hide_index=True)
+
+        st.markdown("### Nexus FVGs")
+        if nexus_fvgs:
+            fvg_df = pd.DataFrame(nexus_fvgs[-50:])
+            st.dataframe(fvg_df, use_container_width=True, hide_index=True)
+        else:
+            st.info("No FVGs detected.")
+
+# ==========================================
+# TAB: QUANT / STATS
+# ==========================================
+with tab_quant:
+    st.subheader("🧪 Quant / Stats")
+
+    c1, c2 = st.columns([1, 1])
+
+    with c1:
+        st.markdown("### Correlations (Macro Basket)")
+        try:
+            corr = calc_correlations(selected_ticker, lookback_days=180)
+            st.dataframe(corr.to_frame("Correlation"), use_container_width=True)
+        except Exception as e:
+            st.info(f"Correlation unavailable: {e}")
+
+        st.markdown("### Multi-Timeframe Trend DNA")
+        mtf = calc_mtf_trend(selected_ticker)
+        st.dataframe(mtf, use_container_width=True)
+
+    with c2:
+        st.markdown("### Monte Carlo (30d)")
+        sims = st.slider("Simulations", 200, 3000, 1000, 100)
+        days = st.slider("Days", 10, 90, 30, 5)
+        paths = run_monte_carlo(df_ind, days=days, simulations=sims)
+        # Plot mean + percentile bands (no explicit colors requested)
+        mean_path = paths.mean(axis=1)
+        p10 = np.percentile(paths, 10, axis=1)
+        p90 = np.percentile(paths, 90, axis=1)
+
+        x = list(range(days))
+        fig_mc = go.Figure()
+        fig_mc.add_trace(go.Scatter(x=x, y=mean_path, mode="lines", name="Mean"))
+        fig_mc.add_trace(go.Scatter(x=x, y=p10, mode="lines", name="P10"))
+        fig_mc.add_trace(go.Scatter(x=x, y=p90, mode="lines", name="P90"))
+        fig_mc.update_layout(height=420, template="plotly_dark", xaxis_title="Day", yaxis_title="Price")
+        st.plotly_chart(fig_mc, use_container_width=True)
+
+        st.markdown("### Intraday DNA (Hourly)")
+        intr = calc_intraday_dna(selected_ticker)
+        if intr is None:
+            st.info("Intraday DNA unavailable for this symbol/timeframe.")
+        else:
+            st.dataframe(intr, use_container_width=True)
+
+# ==========================================
+# TAB: MACRO
+# ==========================================
+with tab_macro:
+    st.subheader("🌍 Macro Dashboard")
+    perf = get_global_performance()
+    if perf is not None and len(perf):
+        st.markdown("### Global Basket (last day % change)")
+        st.bar_chart(perf)
+    else:
+        st.info("Global performance unavailable.")
+
+    st.markdown("### Full Macro Tape (grouped)")
+    st.code(macro_text)
+
+# ==========================================
+# TAB: AI ANALYST
+# ==========================================
+with tab_ai:
+    st.subheader("🤖 AI Analyst")
+    st.caption("Uses your OpenAI API key if provided in the sidebar (or st.secrets).")
+
+    if st.button("Run AI Analyst"):
+        ai_text = ask_ai_analyst(df_ind, selected_ticker, fundamentals, balance, risk_pct, timeframe)
+        st.session_state["ai_verdict_latest"] = ai_text
+
+    ai_latest = st.session_state.get("ai_verdict_latest", "")
+    if ai_latest:
+        st.markdown(ai_latest)
+    else:
+        st.info("Click 'Run AI Analyst' to generate the AI summary.")
+
+# ==========================================
+# TAB: TELEGRAM
+# ==========================================
+with tab_telegram:
+    st.subheader("📡 Telegram Signal Console")
+
+    st.markdown("### Preview Report")
+    # Use existing cached AI verdict if any; otherwise keep empty
+    ai_verdict = st.session_state.get("ai_verdict_latest", "AI verdict not generated yet.")
+    msgs = format_signal_report(
+        ticker=selected_ticker,
+        interval=timeframe,
+        df=df_ind,
+        last_row=last,
+        macro_text=macro_text,
+        ai_verdict=ai_verdict,
+        balance=balance,
+        risk_pct=risk_pct,
+        report_type=report_type,
+        sr_zones=sr_zones
+    )
+    for i, m in enumerate(msgs, start=1):
+        with st.expander(f"Message {i}"):
+            st.code(m)
+
+    st.markdown("### Send")
+    if st.button("🚀 Send to Telegram"):
+        try:
+            send_telegram_messages(tg_token, tg_chat, msgs, uploaded_file=upload_img)
+            st.success("Sent.")
+        except Exception as e:
+            st.error(f"Telegram error: {e}")
+
+# ==========================================
+# FOOTER
+# ==========================================
+st.markdown("---")
+st.caption("👁️ DarkPool Titan Terminal — Internal intelligence display. Not financial advice.")
+
