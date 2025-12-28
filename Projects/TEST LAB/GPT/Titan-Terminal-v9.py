@@ -1433,6 +1433,26 @@ def _safe_float(x):
     except:
         return float("nan")
 
+def _fmt_num(x, dp=2):
+    v = _safe_float(x)
+    if np.isfinite(v):
+        return f"{v:.{dp}f}"
+    return "N/A"
+
+def _fmt_int(x):
+    try:
+        if np.isfinite(_safe_float(x)):
+            return str(int(float(x)))
+        return "N/A"
+    except:
+        return "N/A"
+
+def _fmt_bool(x):
+    try:
+        return "TRUE" if bool(x) else "FALSE"
+    except:
+        return "FALSE"
+
 def build_trade_levels(last_row: pd.Series, direction: str):
     """
     Deterministic levels derived from computed indicators only.
@@ -1469,6 +1489,173 @@ def build_position_sizing(balance: float, risk_pct: float, levels: dict):
     size = risk_dollars / r
     return {"risk_usd": risk_dollars, "size_units": size, "note": ""}
 
+def _build_full_indicator_lines(df: pd.DataFrame, last_row: pd.Series, sr_zones: list | None = None):
+    """
+    FULL coverage of ALL indicator outputs computed in this code path.
+    No omissions: we enumerate every known indicator column created by calc_indicators() + calc_fear_greed_v4().
+    If a column is missing for any reason, we report it as N/A (runtime-safe).
+    """
+    lines = []
+
+    # Core OHLCV (base data)
+    lines.append("🧾 CORE OHLCV (LAST BAR)")
+    lines.append(f"- Open: {_fmt_num(last_row.get('Open', np.nan))} | High: {_fmt_num(last_row.get('High', np.nan))} | Low: {_fmt_num(last_row.get('Low', np.nan))} | Close: {_fmt_num(last_row.get('Close', np.nan))}")
+    lines.append(f"- Volume: {_fmt_int(last_row.get('Volume', np.nan))}")
+
+    # Base Calcs (existing)
+    lines.append("\n🧩 BASE CALCS (EXISTING)")
+    lines.append(f"- HMA(55): {_fmt_num(last_row.get('HMA', np.nan))}")
+    lines.append(f"- ATR(14): {_fmt_num(last_row.get('ATR', np.nan))}")
+    lines.append(f"- Pivot_Resist(20H): {_fmt_num(last_row.get('Pivot_Resist', np.nan))}")
+    lines.append(f"- Pivot_Support(20L): {_fmt_num(last_row.get('Pivot_Support', np.nan))}")
+    lines.append(f"- MFI (custom 14): {_fmt_num(last_row.get('MFI', np.nan))}")
+
+    # Apex Trend & Liquidity Master (FULL)
+    lines.append("\n🌊 APEX TREND & LIQUIDITY MASTER (FULL PORT)")
+    lines.append(f"- Apex_Base: {_fmt_num(last_row.get('Apex_Base', np.nan))}")
+    lines.append(f"- Apex_ATR_Main(len_main): {_fmt_num(last_row.get('Apex_ATR_Main', np.nan))}")
+    lines.append(f"- Apex_Upper: {_fmt_num(last_row.get('Apex_Upper', np.nan))} | Apex_Lower: {_fmt_num(last_row.get('Apex_Lower', np.nan))}")
+    lines.append(f"- Apex_Trend: {_fmt_int(last_row.get('Apex_Trend', 0))} (1 bull, -1 bear, 0 chop)")
+    lines.append(f"- Apex_Sig_Buy: {_fmt_bool(last_row.get('Apex_Sig_Buy', False))} | Apex_Sig_Sell: {_fmt_bool(last_row.get('Apex_Sig_Sell', False))}")
+    lines.append(f"- Apex_RSI(14): {_fmt_num(last_row.get('Apex_RSI', np.nan), 1)}")
+    lines.append(f"- Apex_VolMA20: {_fmt_num(last_row.get('Apex_VolMA20', np.nan))} | Apex_HighVol: {_fmt_bool(last_row.get('Apex_HighVol', False))}")
+    lines.append(f"- Apex_Supply_Zones_Count: {_fmt_int(last_row.get('Apex_Supply_Zones_Count', 0))} | Apex_Demand_Zones_Count: {_fmt_int(last_row.get('Apex_Demand_Zones_Count', 0))}")
+    lines.append(f"- ApexMaster_Upper(alias): {_fmt_num(last_row.get('ApexMaster_Upper', np.nan))} | ApexMaster_Lower(alias): {_fmt_num(last_row.get('ApexMaster_Lower', np.nan))}")
+    lines.append(f"- ApexMaster_Trend(alias): {_fmt_int(last_row.get('ApexMaster_Trend', 0))}")
+    lines.append(f"- ApexMaster_Sig_Buy(alias): {_fmt_bool(last_row.get('ApexMaster_Sig_Buy', False))} | ApexMaster_Sig_Sell(alias): {_fmt_bool(last_row.get('ApexMaster_Sig_Sell', False))}")
+
+    # Squeeze Momentum (existing)
+    lines.append("\n💥 DARKPOOL SQUEEZE MOMENTUM (EXISTING)")
+    lines.append(f"- Sqz_Basis(20): {_fmt_num(last_row.get('Sqz_Basis', np.nan))}")
+    lines.append(f"- Sqz_Dev(20)*2: {_fmt_num(last_row.get('Sqz_Dev', np.nan))}")
+    lines.append(f"- Sqz_Upper_BB: {_fmt_num(last_row.get('Sqz_Upper_BB', np.nan))} | Sqz_Lower_BB: {_fmt_num(last_row.get('Sqz_Lower_BB', np.nan))}")
+    lines.append(f"- Sqz_Ma_KC(20): {_fmt_num(last_row.get('Sqz_Ma_KC', np.nan))}")
+    lines.append(f"- Sqz_Range_MA(ATR20): {_fmt_num(last_row.get('Sqz_Range_MA', np.nan))}")
+    lines.append(f"- Sqz_Upper_KC: {_fmt_num(last_row.get('Sqz_Upper_KC', np.nan))} | Sqz_Lower_KC: {_fmt_num(last_row.get('Sqz_Lower_KC', np.nan))}")
+    lines.append(f"- Squeeze_On: {_fmt_bool(last_row.get('Squeeze_On', False))}")
+    lines.append(f"- Sqz_Mom: {_fmt_num(last_row.get('Sqz_Mom', np.nan), 1)}")
+
+    # Money Flow Matrix (existing)
+    lines.append("\n🌊 MONEY FLOW MATRIX (EXISTING)")
+    lines.append(f"- MF_Matrix: {_fmt_num(last_row.get('MF_Matrix', np.nan), 2)}")
+
+    # Dark Vector Scalping (existing)
+    lines.append("\n⚔️ DARK VECTOR SCALPING (EXISTING)")
+    lines.append(f"- VS_Low(amp=5): {_fmt_num(last_row.get('VS_Low', np.nan))} | VS_High(amp=5): {_fmt_num(last_row.get('VS_High', np.nan))}")
+    lines.append(f"- VS_Trend: {_fmt_int(last_row.get('VS_Trend', 0))} (1 bull, -1 bear)")
+
+    # Advanced Volume (existing)
+    lines.append("\n🔋 ADVANCED VOLUME (EXISTING)")
+    lines.append(f"- RVOL(20): {_fmt_num(last_row.get('RVOL', np.nan), 2)}x")
+
+    # EVWM (existing)
+    lines.append("\n🧲 EVWM (EXISTING)")
+    lines.append(f"- EVWM: {_fmt_num(last_row.get('EVWM', np.nan), 2)}")
+
+    # Simple Gann (existing)
+    lines.append("\n📐 GANN HIGH/LOW ACTIVATOR (SIMPLE, EXISTING)")
+    lines.append(f"- Gann_High(3): {_fmt_num(last_row.get('Gann_High', np.nan))} | Gann_Low(3): {_fmt_num(last_row.get('Gann_Low', np.nan))}")
+    lines.append(f"- Gann_Trend(simple): {_fmt_int(last_row.get('Gann_Trend', 0))}")
+
+    # Dark Vector (SuperTrend) (existing)
+    lines.append("\n🧭 DARK VECTOR (SUPERTREND, EXISTING)")
+    lines.append(f"- DarkVector_Trend: {_fmt_int(last_row.get('DarkVector_Trend', 0))} (1 up, -1 down)")
+
+    # Trend Shield (existing)
+    lines.append("\n🛡️ WYCKOFF VSA TREND SHIELD (EXISTING)")
+    lines.append(f"- Trend_Shield_Bull: {_fmt_bool(last_row.get('Trend_Shield_Bull', False))}")
+
+    # Nexus v8.2 (FULL)
+    lines.append("\n🧠 NEXUS v8.2 (FULL PORT)")
+    lines.append(f"- Nexus_Kernel: {_fmt_num(last_row.get('Nexus_Kernel', np.nan))}")
+    lines.append(f"- Nexus_KernelTrend: {_fmt_int(last_row.get('Nexus_KernelTrend', 0))}")
+    lines.append(f"- Nexus_GannActivator: {_fmt_num(last_row.get('Nexus_GannActivator', np.nan))}")
+    lines.append(f"- Nexus_GannTrend: {_fmt_int(last_row.get('Nexus_GannTrend', 0))}")
+    lines.append(f"- Nexus_UT_Stop: {_fmt_num(last_row.get('Nexus_UT_Stop', np.nan))}")
+    lines.append(f"- Nexus_UT_Pos: {_fmt_int(last_row.get('Nexus_UT_Pos', 0))} (1 long, -1 short, 0 flat)")
+    lines.append(f"- Nexus_StructState: {_fmt_int(last_row.get('Nexus_StructState', 0))}")
+    lines.append(f"- Nexus_BOS_Bull: {_fmt_bool(last_row.get('Nexus_BOS_Bull', False))} | Nexus_BOS_Bear: {_fmt_bool(last_row.get('Nexus_BOS_Bear', False))}")
+    lines.append(f"- Nexus_CHoCH_Bull: {_fmt_bool(last_row.get('Nexus_CHoCH_Bull', False))} | Nexus_CHoCH_Bear: {_fmt_bool(last_row.get('Nexus_CHoCH_Bear', False))}")
+    lines.append(f"- Nexus_FullBull: {_fmt_bool(last_row.get('Nexus_FullBull', False))} | Nexus_FullBear: {_fmt_bool(last_row.get('Nexus_FullBear', False))}")
+    lines.append(f"- Nexus_Signal_Buy: {_fmt_bool(last_row.get('Nexus_Signal_Buy', False))} | Nexus_Signal_Sell: {_fmt_bool(last_row.get('Nexus_Signal_Sell', False))}")
+    lines.append(f"- Nexus_FVG_Count: {_fmt_int(last_row.get('Nexus_FVG_Count', 0))}")
+
+    # Apex Vector v4.1 (FULL)
+    lines.append("\n⚛️ APEX VECTOR v4.1 (FULL PORT)")
+    lines.append(f"- Vector_Eff: {_fmt_num(last_row.get('Vector_Eff', np.nan), 4)}")
+    lines.append(f"- Vector_VolFact: {_fmt_num(last_row.get('Vector_VolFact', np.nan), 4)}")
+    lines.append(f"- Vector_Flux: {_fmt_num(last_row.get('Vector_Flux', np.nan), 4)}")
+    lines.append(f"- Vector_Th_Super: {_fmt_num(last_row.get('Vector_Th_Super', np.nan), 4)} | Vector_Th_Resist: {_fmt_num(last_row.get('Vector_Th_Resist', np.nan), 4)}")
+    lines.append(f"- Vector_SuperBull: {_fmt_bool(last_row.get('Vector_SuperBull', False))} | Vector_SuperBear: {_fmt_bool(last_row.get('Vector_SuperBear', False))}")
+    lines.append(f"- Vector_Resistive: {_fmt_bool(last_row.get('Vector_Resistive', False))} | Vector_Heat: {_fmt_bool(last_row.get('Vector_Heat', False))}")
+    lines.append(f"- Vector_Div_Bull_Reg: {_fmt_bool(last_row.get('Vector_Div_Bull_Reg', False))} | Vector_Div_Bull_Hid: {_fmt_bool(last_row.get('Vector_Div_Bull_Hid', False))}")
+    lines.append(f"- Vector_Div_Bear_Reg: {_fmt_bool(last_row.get('Vector_Div_Bear_Reg', False))} | Vector_Div_Bear_Hid: {_fmt_bool(last_row.get('Vector_Div_Bear_Hid', False))}")
+
+    # Scores (GM + Omni)
+    lines.append("\n🧬 TITAN SCORING")
+    lines.append(f"- GM_Score: {_fmt_int(last_row.get('GM_Score', 0))}")
+    lines.append(f"- Omni_Score: {_fmt_int(last_row.get('Omni_Score', 0))}")
+    lines.append(f"- Omni_Confidence: {_fmt_int(last_row.get('Omni_Confidence', 50))}/100")
+
+    # Dashboard v2 (existing)
+    lines.append("\n📟 DARKPOOL DASHBOARD (EXISTING METRICS)")
+    lines.append(f"- MACD: {_fmt_num(last_row.get('MACD', np.nan), 4)} | Signal: {_fmt_num(last_row.get('Signal', np.nan), 4)} | Hist: {_fmt_num(last_row.get('Hist', np.nan), 4)}")
+    lines.append(f"- Stoch_K: {_fmt_num(last_row.get('Stoch_K', np.nan), 2)} | Stoch_D: {_fmt_num(last_row.get('Stoch_D', np.nan), 2)}")
+    lines.append(f"- ROC(14): {_fmt_num(last_row.get('ROC', np.nan), 2)}")
+    lines.append(f"- EMA_Fast(9): {_fmt_num(last_row.get('EMA_Fast', np.nan))} | EMA_Slow(21): {_fmt_num(last_row.get('EMA_Slow', np.nan))} | EMA_50: {_fmt_num(last_row.get('EMA_50', np.nan))}")
+    lines.append(f"- OBV: {_fmt_num(last_row.get('OBV', np.nan), 0)}")
+    lines.append(f"- VWAP(cum): {_fmt_num(last_row.get('VWAP', np.nan))}")
+    lines.append(f"- ADX: {_fmt_num(last_row.get('ADX', np.nan), 2)}")
+    lines.append(f"- RSI(14): {_fmt_num(last_row.get('RSI', np.nan), 1)}")
+    lines.append(f"- Mom_Score: {_fmt_num(last_row.get('Mom_Score', np.nan), 0)}")
+
+    # Fear & Greed v4 (existing)
+    lines.append("\n😱😈 FEAR & GREED v4 (PORT)")
+    lines.append(f"- FG_RSI: {_fmt_num(last_row.get('FG_RSI', np.nan), 1)}")
+    lines.append(f"- FG_MACD: {_fmt_num(last_row.get('FG_MACD', np.nan), 1)}")
+    lines.append(f"- FG_BB: {_fmt_num(last_row.get('FG_BB', np.nan), 1)}")
+    lines.append(f"- FG_MA: {_fmt_num(last_row.get('FG_MA', np.nan), 1)}")
+    lines.append(f"- FG_Raw: {_fmt_num(last_row.get('FG_Raw', np.nan), 2)}")
+    lines.append(f"- FG_Index: {_fmt_num(last_row.get('FG_Index', np.nan), 2)}")
+    lines.append(f"- IS_FOMO: {_fmt_bool(last_row.get('IS_FOMO', False))} | IS_PANIC: {_fmt_bool(last_row.get('IS_PANIC', False))}")
+
+    # SR Channels summary (analysis output in code)
+    lines.append("\n🏗️ SR CHANNELS (get_sr_channels)")
+    if sr_zones is None:
+        lines.append("- SR Zones: N/A (not provided)")
+    else:
+        if len(sr_zones) == 0:
+            lines.append("- SR Zones: None detected")
+        else:
+            for i, z in enumerate(sr_zones, start=1):
+                lines.append(f"- Zone {i}: min {_fmt_num(z.get('min', np.nan))} | max {_fmt_num(z.get('max', np.nan))} | score {_fmt_int(z.get('score', 0))}")
+
+    return lines
+
+def _chunk_lines_to_messages(title: str, ts_txt: str, interval: str, ticker: str, lines: list[str], hard_limit_chars: int = 1800):
+    """
+    Produce multi-part messages that are already safely sized.
+    send_telegram_messages() still does its own chunking; this is for readability + 'no omissions' compliance.
+    """
+    messages = []
+    header = f"{title} — {ticker} ({interval})\n🕒 {ts_txt}\n"
+    current = header + "\n"
+    part = 1
+
+    for ln in lines:
+        add = ln + "\n"
+        if len(current) + len(add) > hard_limit_chars:
+            messages.append(f"{header}📦 Part {part}\n\n{current[len(header)+1:]}".strip())
+            part += 1
+            current = header + "\n" + add
+        else:
+            current += add
+
+    if current.strip():
+        messages.append(f"{header}📦 Part {part}\n\n{current[len(header)+1:]}".strip())
+
+    return messages
+
 def format_signal_report(
     ticker: str,
     interval: str,
@@ -1478,7 +1665,8 @@ def format_signal_report(
     ai_verdict: str,
     balance: float,
     risk_pct: float,
-    report_type: str
+    report_type: str,
+    sr_zones: list | None = None
 ):
     """
     Multi-type Telegram reports:
@@ -1486,6 +1674,9 @@ def format_signal_report(
       - TRADE_SCALP
       - TRADE_SWING
       - FULL_ANALYSIS
+
+    UPGRADE:
+      FULL_ANALYSIS now includes FULL ANALYSIS of ALL indicators computed in this codebase (no omissions).
     """
     ts = df.index[-1]
     ts_txt = ts.strftime("%Y-%m-%d %H:%M") if hasattr(ts, "strftime") else str(ts)
@@ -1546,6 +1737,13 @@ def format_signal_report(
         mode_tag = "⚡ SCALP SETUP" if report_type == "TRADE_SCALP" else "📈 SWING SETUP"
         risk_line = _safe_float(last_row.get("Nexus_UT_Stop", np.nan))
         risk_line_txt = f"{risk_line:.2f}" if np.isfinite(risk_line) else "N/A"
+
+        # FIXED: syntax-safe stop string (base behavior preserved; only crash fix)
+        if np.isfinite(risk_line):
+            stop_txt = "Nexus UT " + risk_line_txt
+        else:
+            stop_txt = f"ATR Ref {levels['stop']:.2f}" if np.isfinite(_safe_float(levels.get("stop", np.nan))) else "ATR Ref N/A"
+
         msg = (
             f"{mode_tag} — {ticker} ({interval})\n"
             f"🕒 {ts_txt}\n\n"
@@ -1555,7 +1753,7 @@ def format_signal_report(
             f"Divergence: {div_txt}\n"
             f"Squeeze: {squeeze}\n\n"
             f"📍 Entry(ref): ${levels['entry']:.2f}\n"
-            f"🛡️ Stop(ref): {('Nexus UT ' + risk_line_txt) if np.isfinite(risk_line) else f'ATR Ref {levels['stop']:.2f}'}\n"
+            f"🛡️ Stop(ref): {stop_txt}\n"
             f"🎯 Targets(ref): TP1 {levels['tp1']:.2f} | TP2 {levels['tp2']:.2f} | TP3 {levels['tp3']:.2f}\n\n"
             f"💼 Risk Model:\n"
             f"- Capital: ${balance:,.0f}\n"
@@ -1569,39 +1767,54 @@ def format_signal_report(
         return [msg]
 
     # FULL_ANALYSIS (multi-part; will be chunked by sender)
-    msg = (
-        f"🧠 FULL TITAN ANALYSIS — {ticker} ({interval})\n"
-        f"🕒 {ts_txt}\n\n"
-        f"1) REGIME & BIAS\n"
-        f"- Price: ${price:.2f}\n"
-        f"- GM Score: {gm_score}/5 | Omni Score: {omni_score} | Confidence: {conf}/100\n"
-        f"- Direction Bias: {direction}\n\n"
-        f"2) TREND STACK\n"
-        f"- Apex Trend & Liquidity: {apex_bias} | Signals: "
-        f"{'BUY' if bool(last_row.get('Apex_Sig_Buy', False)) else ('SELL' if bool(last_row.get('Apex_Sig_Sell', False)) else 'None')}\n"
-        f"- Nexus Omni: {nexus_bias} | KernelTrend: {int(last_row.get('Nexus_KernelTrend', 0))} | "
-        f"GannTrend: {int(last_row.get('Nexus_GannTrend', 0))} | UT Pos: {int(last_row.get('Nexus_UT_Pos', 0))}\n"
-        f"- SuperTrend (DarkVector_Trend): {int(last_row.get('DarkVector_Trend', 0))}\n\n"
-        f"3) MOMENTUM & FLOW\n"
-        f"- Apex Vector State: {vector_state}\n"
-        f"- Vector Flux: {_safe_float(last_row.get('Vector_Flux', np.nan)):.3f}\n"
-        f"- Divergences: {div_txt}\n"
-        f"- Squeeze Momentum: {'Rising' if _safe_float(last_row.get('Sqz_Mom', 0)) > 0 else 'Falling'} ({_safe_float(last_row.get('Sqz_Mom', 0)):.1f}) | {squeeze}\n"
-        f"- Money Flow Matrix: {_safe_float(last_row.get('MF_Matrix', np.nan)):.2f}\n\n"
-        f"4) STRUCTURE & LIQUIDITY\n"
-        f"- Nexus Structure: {struct_txt}\n"
-        f"- Apex Liquidity Zones (active snapshot): Supply {int(last_row.get('Apex_Supply_Zones_Count', 0))} | Demand {int(last_row.get('Apex_Demand_Zones_Count', 0))}\n"
-        f"- Nexus FVGs (detected): {int(last_row.get('Nexus_FVG_Count', 0))}\n\n"
-        f"5) RISK SNAPSHOT\n"
-        f"- ATR(14): {_safe_float(last_row.get('ATR', np.nan)):.2f}\n"
-        f"- Nexus UT Stop(ref): {_safe_float(last_row.get('Nexus_UT_Stop', np.nan)) if np.isfinite(_safe_float(last_row.get('Nexus_UT_Stop', np.nan))) else 'N/A'}\n"
-        f"- Position Model (ref): Risk ${sizing['risk_usd']:.2f} | Size {sizing['size_units']:.4f}\n\n"
-        f"6) MACRO CONTEXT\n{macro_text}\n\n"
-        f"7) AI OUTLOOK (Grounded Summary)\n{ai_verdict}\n\n"
-        f"⚠️ Not financial advice. This is a computed market intelligence report.\n"
-        f"#DarkPool #Titan #Quant"
+    # UPGRADE: include FULL analysis of ALL indicators in code path (no omissions)
+    full_lines = []
+
+    full_lines.append("1) REGIME & BIAS")
+    full_lines.append(f"- Price: ${_fmt_num(last_row.get('Close', np.nan))}")
+    full_lines.append(f"- GM Score: {gm_score}/5 | Omni Score: {omni_score} | Confidence: {conf}/100")
+    full_lines.append(f"- Direction Bias (from Omni_Score): {direction}")
+    full_lines.append("")
+
+    full_lines.append("2) RISK MODEL (REFERENCE)")
+    full_lines.append(f"- Capital: ${balance:,.0f} | Risk: {risk_pct:.2f}% = ${sizing['risk_usd']:.2f}")
+    full_lines.append(f"- Entry(ref): {_fmt_num(levels.get('entry', np.nan))} | Stop(ref): {_fmt_num(levels.get('stop', np.nan))}")
+    full_lines.append(f"- TP1: {_fmt_num(levels.get('tp1', np.nan))} | TP2: {_fmt_num(levels.get('tp2', np.nan))} | TP3: {_fmt_num(levels.get('tp3', np.nan))}")
+    full_lines.append(f"- Position Size(ref units): {_fmt_num(sizing.get('size_units', np.nan), 4)}")
+    full_lines.append("")
+
+    full_lines.append("3) HIGH-LEVEL STACK (QUICK STATE)")
+    full_lines.append(f"- Apex: {apex_bias} | Apex_Sig_Buy: {_fmt_bool(last_row.get('Apex_Sig_Buy', False))} | Apex_Sig_Sell: {_fmt_bool(last_row.get('Apex_Sig_Sell', False))}")
+    full_lines.append(f"- Nexus: {nexus_bias} | KernelTrend: {_fmt_int(last_row.get('Nexus_KernelTrend', 0))} | GannTrend: {_fmt_int(last_row.get('Nexus_GannTrend', 0))} | UT_Pos: {_fmt_int(last_row.get('Nexus_UT_Pos', 0))}")
+    full_lines.append(f"- Vector: {vector_state} | Flux: {_fmt_num(last_row.get('Vector_Flux', np.nan), 4)} | Divergence: {div_txt}")
+    full_lines.append(f"- Structure: {struct_txt}")
+    full_lines.append(f"- Squeeze: {squeeze} | Sqz_Mom: {_fmt_num(last_row.get('Sqz_Mom', np.nan), 1)}")
+    full_lines.append("")
+
+    full_lines.append("4) FULL INDICATOR READOUT (NO OMISSIONS)")
+    # append exhaustive lines
+    full_lines.extend(_build_full_indicator_lines(df, last_row, sr_zones=sr_zones))
+    full_lines.append("")
+
+    full_lines.append("5) MACRO CONTEXT")
+    full_lines.append(macro_text)
+    full_lines.append("")
+
+    full_lines.append("6) AI OUTLOOK (Grounded Summary)")
+    full_lines.append(ai_verdict)
+    full_lines.append("")
+    full_lines.append("⚠️ Not financial advice. This is a computed market intelligence report.")
+    full_lines.append("#DarkPool #Titan #Quant")
+
+    messages = _chunk_lines_to_messages(
+        title="🧠 FULL TITAN ANALYSIS (ALL INDICATORS)",
+        ts_txt=ts_txt,
+        interval=interval,
+        ticker=ticker,
+        lines=full_lines,
+        hard_limit_chars=1800
     )
-    return [msg]
+    return messages
 
 def send_telegram_messages(tg_token: str, tg_chat: str, messages: list[str], uploaded_file=None):
     """
@@ -2168,7 +2381,8 @@ if st.session_state.get('run_analysis'):
                     ai_verdict=ai_verdict,
                     balance=float(balance),
                     risk_pct=float(risk_pct),
-                    report_type=template
+                    report_type=template,
+                    sr_zones=sr_zones
                 )
                 preview_text = "\n\n---\n\n".join(messages_preview)
                 msg = st.text_area("Message Preview", value=preview_text, height=220)
@@ -2201,7 +2415,8 @@ if st.session_state.get('run_analysis'):
                                 ticker=ticker, interval=interval, df=df, last_row=last_r,
                                 macro_text=macro_text, ai_verdict=ai_verdict,
                                 balance=float(balance), risk_pct=float(risk_pct),
-                                report_type=template
+                                report_type=template,
+                                sr_zones=sr_zones
                             )
                             send_telegram_messages(tg_token, tg_chat, auto_msgs, uploaded_file=None)
                             st.session_state.last_broadcast_fingerprint = fingerprint
@@ -2219,7 +2434,8 @@ if st.session_state.get('run_analysis'):
                                 ticker=ticker, interval=interval, df=df, last_row=last_r,
                                 macro_text=macro_text, ai_verdict=ai_verdict,
                                 balance=float(balance), risk_pct=float(risk_pct),
-                                report_type=template
+                                report_type=template,
+                                sr_zones=sr_zones
                             )
                             send_telegram_messages(tg_token, tg_chat, to_send, uploaded_file=uploaded_file)
                             st.session_state.last_broadcast_fingerprint = fingerprint
