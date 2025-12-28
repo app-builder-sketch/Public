@@ -294,6 +294,58 @@ def render_markdown_preview(text: str) -> str:
     text = re.sub(r'- \[x\]', '☑', text)
     return text
 
+def display_note_card(note):
+    """Display a summary card for a note"""
+    is_active = note["id"] == st.session_state.active_id
+    
+    # Card styling
+    card_class = "note-card"
+    if note.get("pinned"):
+        card_class += " pinned"
+    elif note.get("favorite"):
+        card_class += " favorite"
+    
+    # Icons
+    icons = []
+    if note.get("locked"):
+        icons.append("🔒")
+    if note.get("favorite"):
+        icons.append("⭐")
+    if note.get("pinned"):
+        icons.append("📌")
+    if note.get("archived"):
+        icons.append("📦")
+    
+    icon_str = " ".join(icons)
+    
+    # Preview
+    preview = note["body"][:100] + "..." if len(note["body"]) > 100 else note["body"]
+    time_ago = format_time_ago(note.get("updated_at", note["created_at"]))
+    
+    # Tags
+    tags_html = " ".join([f'<span class="tag">#{tag}</span>' for tag in note.get("tags", [])[:3]])
+    
+    col_main, col_actions = st.columns([4, 1])
+    
+    with col_main:
+        if st.button(
+            f"{icon_str} **{note['title']}**",
+            key=f"note_{note['id']}",
+            use_container_width=True,
+            help="Click to edit"
+        ):
+            st.session_state.active_id = note["id"]
+            st.rerun()
+        st.caption(f"{preview}")
+        if tags_html:
+            st.markdown(tags_html, unsafe_allow_html=True)
+        st.caption(f"🕐 {time_ago}")
+    
+    with col_actions:
+        if st.button("⋮", key=f"menu_{note['id']}", help="Quick actions"):
+            # This would open a context menu - simplified here
+            pass
+
 # ----------------------------
 # Session State Management
 # ----------------------------
@@ -1089,58 +1141,6 @@ if st.session_state.view_mode == "notes":
                     fig3 = px.bar(tag_df, x="Tag", y="Count", color="Count", template=chart_template)
                     fig3.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
                     st.plotly_chart(fig3, use_container_width=True)
-
-# Helper function for note cards
-def display_note_card(note):
-    is_active = note["id"] == st.session_state.active_id
-    
-    # Card styling
-    card_class = "note-card"
-    if note.get("pinned"):
-        card_class += " pinned"
-    elif note.get("favorite"):
-        card_class += " favorite"
-    
-    # Icons
-    icons = []
-    if note.get("locked"):
-        icons.append("🔒")
-    if note.get("favorite"):
-        icons.append("⭐")
-    if note.get("pinned"):
-        icons.append("📌")
-    if note.get("archived"):
-        icons.append("📦")
-    
-    icon_str = " ".join(icons)
-    
-    # Preview
-    preview = note["body"][:100] + "..." if len(note["body"]) > 100 else note["body"]
-    time_ago = format_time_ago(note.get("updated_at", note["created_at"]))
-    
-    # Tags
-    tags_html = " ".join([f'<span class="tag">#{tag}</span>' for tag in note.get("tags", [])[:3]])
-    
-    col_main, col_actions = st.columns([4, 1])
-    
-    with col_main:
-        if st.button(
-            f"{icon_str} **{note['title']}**",
-            key=f"note_{note['id']}",
-            use_container_width=True,
-            help="Click to edit"
-        ):
-            st.session_state.active_id = note["id"]
-            st.rerun()
-        st.caption(f"{preview}")
-        if tags_html:
-            st.markdown(tags_html, unsafe_allow_html=True)
-        st.caption(f"🕐 {time_ago}")
-    
-    with col_actions:
-        if st.button("⋮", key=f"menu_{note['id']}", help="Quick actions"):
-            # This would open a context menu - simplified here
-            pass
 
 # =============================================================================
 # CONVERTER MODE
