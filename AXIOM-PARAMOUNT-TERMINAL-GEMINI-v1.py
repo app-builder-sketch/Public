@@ -31,9 +31,11 @@ def get_clean_data(ticker, period, interval):
     """Downloads and flattens data to prevent MultiIndex errors."""
     try:
         df = yf.download(ticker, period=period, interval=interval, progress=False)
-        # CRITICAL FIX: Flatten MultiIndex columns
+        
+        # CRITICAL FIX: Flatten MultiIndex columns if present
         if isinstance(df.columns, pd.MultiIndex):
             df.columns = df.columns.get_level_values(0)
+            
         return df
     except Exception as e:
         return pd.DataFrame()
@@ -47,8 +49,11 @@ def get_macro_data():
     }
     try:
         data = yf.download(list(tickers.values()), period="5d", interval="1d", progress=False)['Close']
+        
+        # CRITICAL FIX: Flatten MultiIndex for Macro Data too
         if isinstance(data.columns, pd.MultiIndex):
             data.columns = data.columns.get_level_values(0)
+            
         return data
     except:
         return pd.DataFrame()
@@ -94,8 +99,9 @@ class UniversalParamountEngine:
         kc_range = atr(df, 20)
         upper_kc, lower_kc = basis + (kc_range * 1.5), basis - (kc_range * 1.5)
         
-        # This was the line causing the error; fixed by the flatten logic in get_clean_data
+        # Squeeze On/Off (Fix applied: indexes are now flat)
         df['Squeeze_On'] = (lower_bb > lower_kc) & (upper_bb < upper_kc)
+        
         # Linear Regression Momentum Proxy
         df['Sqz_Mom'] = (df['Close'] - ((df['High'].rolling(20).max() + df['Low'].rolling(20).min() + basis)/3)).rolling(20).mean()
 
@@ -176,8 +182,18 @@ class ParamountDispatcher:
         ts = datetime.now().strftime("%Y-%m-%d %H:%M UTC")
         
         # Macro Ratios
-        btc_spx = macro_data['BTC-USD'].iloc[-1] / macro_data['SPY'].iloc[-1] if 'BTC-USD' in macro_data else 0
-        spy_tlt = macro_data['SPY'].iloc[-1] / macro_data['TLT'].iloc[-1] if 'SPY' in macro_data else 0
+        btc_spx = 0.0
+        spy_tlt = 0.0
+        
+        # Safe extraction of macro ratios
+        if not macro_data.empty:
+            try:
+                if 'BTC-USD' in macro_data.columns and 'SPY' in macro_data.columns:
+                    btc_spx = macro_data['BTC-USD'].iloc[-1] / macro_data['SPY'].iloc[-1]
+                if 'SPY' in macro_data.columns and 'TLT' in macro_data.columns:
+                    spy_tlt = macro_data['SPY'].iloc[-1] / macro_data['TLT'].iloc[-1]
+            except:
+                pass
         
         emoji = "🟢" if latest['Titan_Score'] > 0 else "🔴"
         
@@ -295,9 +311,15 @@ if st.button(f"EXECUTE FULL ANALYSIS"):
             with t4:
                 # MACRO RATIOS
                 if not macro.empty:
-                    m_btc_spx = macro['BTC-USD'] / macro['SPY']
-                    m_spy_tlt = macro['SPY'] / macro['TLT']
-                    st.line_chart(pd.DataFrame({"BTC/SPX": m_btc_spx, "SPY/TLT (Risk-On)": m_spy_tlt}))
+                    # Safe plot handling
+                    chart_data = pd.DataFrame()
+                    if 'BTC-USD' in macro.columns and 'SPY' in macro.columns:
+                        chart_data["BTC/SPX"] = macro['BTC-USD'] / macro['SPY']
+                    if 'SPY' in macro.columns and 'TLT' in macro.columns:
+                        chart_data["SPY/TLT (Risk-On)"] = macro['SPY'] / macro['TLT']
+                    
+                    if not chart_data.empty:
+                        st.line_chart(chart_data)
 
             # 5. Broadcast
             if ParamountDispatcher.broadcast(rep_mode, asset, latest, ai_res, macro):
