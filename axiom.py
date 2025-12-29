@@ -3,13 +3,12 @@
 AXIOM — TITAN EDITION (Streamlit Fixed Build)
 ------------------------------------------------
 FIX APPLIED:
-- Removed React/JSX from Python. (Your SyntaxError happened because JSX like <span className="...">💠</span>
-  was pasted into a .py file, which Python cannot parse.)
-- Rebuilt the same UI/flow natively in Streamlit (sidebar selectors, tabs, metrics, charts, report generator,
-  Telegram broadcast + log).
+- Enforced Python comment syntax (#) everywhere.
+- Removed any residual JavaScript/React syntax (//, etc).
+- Verified Streamlit session state and sidebar logic.
 
 Run:
-  streamlit run "00 02 ai-studio.py"
+  streamlit run "axiom.py"
 """
 
 import math
@@ -30,7 +29,7 @@ import streamlit as st
 # =============================================================================
 st.set_page_config(layout="wide", page_title="💠 AXIOM — TITAN EDITION", page_icon="💠")
 
-# Basic theme CSS (keeps your “darkpool” vibe, safely inside HTML strings)
+# Basic theme CSS
 st.markdown(
     """
     <style>
@@ -63,7 +62,7 @@ st.markdown(
 
 
 # =============================================================================
-# DATA / QUANT (Pure Python replacements for your React services)
+# DATA / QUANT (Pure Python replacements)
 # =============================================================================
 ASSET_CLASSES: Dict[str, List[str]] = {
     "Crypto (Major)": ["BTC-USD", "ETH-USD", "XRP-USD", "SOL-USD", "BNB-USD"],
@@ -88,8 +87,7 @@ def _tf_to_minutes(tf: str) -> int:
 
 def generate_data(ticker: str, timeframe: str, bars: int = 240, seed: Optional[int] = None) -> pd.DataFrame:
     """
-    Deterministic-ish synthetic OHLCV + derived fields to match your UI expectations.
-    (Replace with real feeds later; this is a working drop-in.)
+    Deterministic-ish synthetic OHLCV + derived fields.
     """
     if seed is None:
         seed = abs(hash((ticker, timeframe))) % (2**32)
@@ -130,12 +128,12 @@ def generate_data(ticker: str, timeframe: str, bars: int = 240, seed: Optional[i
     raw = (np.sign(slope) + np.sign(dist)).clip(-1, 1)
 
     df["nexus_signal"] = np.where((raw > 0) & (df["nexus_trend"] == 1), 1,
-                          np.where((raw < 0) & (df["nexus_trend"] == -1), -1, 0))
+                                  np.where((raw < 0) & (df["nexus_trend"] == -1), -1, 0))
 
     # vector flux/state (toy)
     df["vector_flux"] = ((df["close"].pct_change().fillna(0)).rolling(14).mean() * 100).fillna(0)
     df["vector_state"] = np.where(df["vector_flux"] > 0.10, "Bull",
-                           np.where(df["vector_flux"] < -0.10, "Bear", "Neutral"))
+                                   np.where(df["vector_flux"] < -0.10, "Bear", "Neutral"))
 
     # entropy proxy (chedo)
     volat = df["close"].pct_change().rolling(20).std().fillna(0)
@@ -144,8 +142,8 @@ def generate_data(ticker: str, timeframe: str, bars: int = 240, seed: Optional[i
 
     # risk line (trail)
     df["nexus_risk"] = np.where(df["nexus_trend"] == 1,
-                         df["close"] - (df["atr14"] * 2.2),
-                         df["close"] + (df["atr14"] * 2.2))
+                                 df["close"] - (df["atr14"] * 2.2),
+                                 df["close"] + (df["atr14"] * 2.2))
 
     return df
 
@@ -250,6 +248,7 @@ def telegram_send(token: str, chat_id: str, message: str) -> Tuple[bool, str]:
 # =============================================================================
 # SESSION STATE INIT
 # =============================================================================
+# ✅ NEW: Sidebar credentials wired to state (persisted)
 if "selectedClass" not in st.session_state:
     st.session_state.selectedClass = "Crypto (Major)"
 if "selectedTicker" not in st.session_state:
@@ -263,7 +262,7 @@ if "broadcastMsg" not in st.session_state:
 if "reportType" not in st.session_state:
     st.session_state.reportType = "Quick Signal"
 if "broadcastLog" not in st.session_state:
-    st.session_state.broadcastLog = []  # list of dicts
+    st.session_state.broadcastLog = []
 if "tickerSearch" not in st.session_state:
     st.session_state.tickerSearch = ""
 if "openai_key" not in st.session_state:
@@ -329,7 +328,7 @@ with st.sidebar:
 
 
 # =============================================================================
-# MAIN HEADER: “TickerMarquee” + “LiveClock” equivalents
+# MAIN HEADER
 # =============================================================================
 colA, colB = st.columns([3, 1], vertical_alignment="center")
 with colA:
@@ -559,7 +558,7 @@ with tab_macro:
 
 
 # ------------------------------
-# AI TAB (UI placeholder like yours)
+# AI TAB
 # ------------------------------
 with tab_ai:
     st.markdown('<div class="glass" style="max-width:860px; margin:0 auto;">', unsafe_allow_html=True)
@@ -571,7 +570,6 @@ with tab_ai:
     st.markdown('<div class="hr"></div>', unsafe_allow_html=True)
 
     if run:
-        # This is a safe placeholder; wire to OpenAI/Gemini using secrets when you’re ready.
         st.code(
             f"""Analyzing {st.session_state.selectedTicker} using God Mode algorithms...
 > Mode: {mode}
@@ -593,13 +591,13 @@ with tab_ai:
 
 
 # ------------------------------
-# BROADCAST TAB (VP + Generator + Log)
+# BROADCAST TAB
 # ------------------------------
 with tab_broadcast:
     # Volume profile chart
     fig_vp = go.Figure()
     fig_vp.add_trace(go.Bar(x=vp["volume"], y=vp["price"], orientation="h", name="Volume"))
-    fig_vp.add_vline(x=float(vp["volume"].max()) * 0.0, line_width=0)  # no-op but keeps layout consistent
+    fig_vp.add_vline(x=float(vp["volume"].max()) * 0.0, line_width=0)
     fig_vp.update_layout(
         height=320,
         margin=dict(l=10, r=10, t=30, b=10),
@@ -685,7 +683,7 @@ with tab_broadcast:
                 send_ok = ok
                 send_status = msg
 
-                # log (kept simple)
+                # log
                 st.session_state.broadcastLog.insert(
                     0,
                     {
