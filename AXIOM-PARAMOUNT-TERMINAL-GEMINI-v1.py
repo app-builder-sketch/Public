@@ -12,7 +12,7 @@ from scipy.stats import linregress
 # ==========================================
 # 1. SYSTEM CONFIGURATION & SECRETS
 # ==========================================
-st.set_page_config(layout="wide", page_title="AXIOM PARAMOUNT ULTIMATE", page_icon="💠")
+st.set_page_config(layout="wide", page_title="AXIOM PARAMOUNT STABLE", page_icon="💠")
 
 # Load Secrets
 try:
@@ -36,6 +36,10 @@ def get_clean_data(ticker, period, interval):
         if isinstance(df.columns, pd.MultiIndex):
             df.columns = df.columns.get_level_values(0)
             
+        # Ensure index is datetime
+        if not isinstance(df.index, pd.DatetimeIndex):
+            df.index = pd.to_datetime(df.index)
+            
         return df
     except Exception as e:
         return pd.DataFrame()
@@ -49,11 +53,8 @@ def get_macro_data():
     }
     try:
         data = yf.download(list(tickers.values()), period="5d", interval="1d", progress=False)['Close']
-        
-        # CRITICAL FIX: Flatten MultiIndex for Macro Data too
         if isinstance(data.columns, pd.MultiIndex):
             data.columns = data.columns.get_level_values(0)
-            
         return data
     except:
         return pd.DataFrame()
@@ -79,7 +80,11 @@ class UniversalParamountEngine:
             return wma(2 * wma(s, half) - wma(s, l), sqrt)
 
         def atr(df, l):
-            tr = pd.concat([df['High']-df['Low'], abs(df['High']-df['Close'].shift()), abs(df['Low']-df['Close'].shift())], axis=1).max(axis=1)
+            # Safe TR calculation
+            high_low = df['High'] - df['Low']
+            high_close = np.abs(df['High'] - df['Close'].shift())
+            low_close = np.abs(df['Low'] - df['Close'].shift())
+            tr = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
             return tr.rolling(l).mean()
 
         # --- B. TREND ARCHITECTURE (Apex Trend + HMA) ---
@@ -99,7 +104,7 @@ class UniversalParamountEngine:
         kc_range = atr(df, 20)
         upper_kc, lower_kc = basis + (kc_range * 1.5), basis - (kc_range * 1.5)
         
-        # Squeeze On/Off (Fix applied: indexes are now flat)
+        # Squeeze On/Off
         df['Squeeze_On'] = (lower_bb > lower_kc) & (upper_bb < upper_kc)
         
         # Linear Regression Momentum Proxy
@@ -107,7 +112,10 @@ class UniversalParamountEngine:
 
         # --- D. MONEY FLOW MATRIX ---
         # Normalized RSI * Volume Flow
-        rsi = 100 - (100 / (1 + (df['Close'].diff().clip(lower=0).rolling(14).mean() / df['Close'].diff().clip(upper=0).abs().rolling(14).mean())))
+        diff = df['Close'].diff()
+        gain = diff.clip(lower=0).rolling(14).mean()
+        loss = diff.clip(upper=0).abs().rolling(14).mean()
+        rsi = 100 - (100 / (1 + (gain / loss)))
         rsi_norm = (rsi - 50)
         mf_vol = df['Volume'] / df['Volume'].rolling(14).mean()
         df['MF_Matrix'] = (rsi_norm * mf_vol).ewm(span=3).mean()
@@ -153,11 +161,20 @@ class UniversalParamountEngine:
 
     @staticmethod
     def calculate_volume_profile(df):
-        """VPVR Calculation."""
+        """VPVR Calculation with Altair Fix."""
         price_bins = np.linspace(df['Low'].min(), df['High'].max(), 50)
         df['Bin'] = pd.cut(df['Close'], bins=price_bins, include_lowest=True)
+        
+        # Group and sum
         vp = df.groupby('Bin', observed=False)['Volume'].sum().reset_index()
-        poc = vp.loc[vp['Volume'].idxmax()]['Bin'].mid
+        
+        # Calculate POC using the Interval object before conversion
+        poc_idx = vp['Volume'].idxmax()
+        poc = vp.loc[poc_idx, 'Bin'].mid
+        
+        # FIX: Convert Interval to Float (Midpoint) for Streamlit Charting
+        vp['Price_Level'] = vp['Bin'].apply(lambda x: x.mid)
+        
         return vp, poc
 
     @staticmethod
@@ -184,16 +201,13 @@ class ParamountDispatcher:
         # Macro Ratios
         btc_spx = 0.0
         spy_tlt = 0.0
-        
-        # Safe extraction of macro ratios
         if not macro_data.empty:
             try:
                 if 'BTC-USD' in macro_data.columns and 'SPY' in macro_data.columns:
                     btc_spx = macro_data['BTC-USD'].iloc[-1] / macro_data['SPY'].iloc[-1]
                 if 'SPY' in macro_data.columns and 'TLT' in macro_data.columns:
                     spy_tlt = macro_data['SPY'].iloc[-1] / macro_data['TLT'].iloc[-1]
-            except:
-                pass
+            except: pass
         
         emoji = "🟢" if latest['Titan_Score'] > 0 else "🔴"
         
@@ -251,7 +265,7 @@ if st.button(f"EXECUTE FULL ANALYSIS"):
         df = get_clean_data(asset, "1y", interval)
         macro = get_macro_data()
         
-        if not df.empty:
+        if not df.empty and len(df) > 50:
             # 2. Logic
             df = UniversalParamountEngine.calculate_all(df)
             latest = df.iloc[-1].to_dict()
@@ -266,6 +280,7 @@ if st.button(f"EXECUTE FULL ANALYSIS"):
             ).choices[0].message.content
             
             # 4. Visualization (Tabular Layout)
+            
             t1, t2, t3, t4 = st.tabs(["📊 God Mode Charts", "⚛️ Quantum Physics", "🔮 Quant Forecasts", "🌍 Macro"])
             
             with t1:
@@ -302,16 +317,16 @@ if st.button(f"EXECUTE FULL ANALYSIS"):
                 with c1:
                     vp, poc = UniversalParamountEngine.calculate_volume_profile(df)
                     st.markdown(f"**Volume Profile POC**: ${poc:.2f}")
-                    st.bar_chart(vp.set_index('Bin')['Volume'])
+                    # FIXED: Using numeric index 'Price_Level' instead of Interval object
+                    st.bar_chart(vp.set_index('Price_Level')['Volume'])
                 with c2:
                     mc = UniversalParamountEngine.run_monte_carlo(df)
                     st.markdown("**Monte Carlo (30 Day Path)**")
-                    st.line_chart(mc[:, :50]) # Show 50 paths
+                    st.line_chart(pd.DataFrame(mc[:, :50])) # Show 50 paths
                     
             with t4:
                 # MACRO RATIOS
                 if not macro.empty:
-                    # Safe plot handling
                     chart_data = pd.DataFrame()
                     if 'BTC-USD' in macro.columns and 'SPY' in macro.columns:
                         chart_data["BTC/SPX"] = macro['BTC-USD'] / macro['SPY']
@@ -327,3 +342,5 @@ if st.button(f"EXECUTE FULL ANALYSIS"):
             
             st.markdown("### 🧬 Detailed AI Synthesis")
             st.write(ai_res)
+        else:
+            st.error("Insufficient data downloaded. Please check ticker symbol.")
