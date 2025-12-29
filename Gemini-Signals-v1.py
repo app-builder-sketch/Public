@@ -1,6 +1,6 @@
 """
 Signals-MOBILE 
-Version 20.2: Enterprise-Grade Trading Engine + Fixed HTML Rendering + Apex Trinity Integration
+Version 20.3: Enterprise-Grade Trading Engine + Deep Analysis Logic + Apex Trinity
 """
 
 import time
@@ -96,36 +96,46 @@ class BroadcastEngine:
     }
     
     # FIXED: Converted to HTML templates for reliable delivery
+    # ENHANCED: Added deep analysis fields
     TEMPLATES = {
         'strict_signal': """🔥 <b>TITAN TRADE ALERT</b> 🔥
 
 📊 <b>{symbol}</b> | {timeframe}
-🎯 <b>{direction}</b> | Confidence: {confidence}%
+🎯 <b>{direction}</b> | Grade: {signal_grade}
 💰 Entry: {entry_price:.4f}
-🛑 Stop: {stop_price:.4f}
+🛑 Stop: {stop_price:.4f} ({risk_pct:.2f}% Risk)
+
 📈 TP1: {tp1:.4f} ({tp1_r}R)
 📈 TP2: {tp2:.4f} ({tp2_r}R)  
 📈 TP3: {tp3:.4f} ({tp3_r}R)
 
-⚡ RVOL: {rvol:.2f}x | Squeeze: {squeeze_status}
-🤖 AI Score: {ai_score}/100 | Grade: {signal_grade}
+🧠 <b>Signal Logic:</b>
+{trade_reason}
 
+⚡ <b>Physics:</b>
+• Flux: {flux_state}
+• RVOL: {rvol:.2f}x
+• Squeeze: {squeeze_status}
+
+🤖 AI Confidence: {ai_score}/100
 ⏰ {timestamp} UTC""",
         
-        'ai_risk_analysis': """🤖 <b>AI RISK ANALYSIS</b> | {symbol}
+        'ai_risk_analysis': """🤖 <b>AI DEEP DIVE</b> | {symbol}
 
 📈 <b>Market Regime:</b> {market_regime}
 📊 <b>Volatility:</b> {current_vol} | Factor: {vol_factor:.1f}x
 ⏰ <b>Session:</b> {session_note}
-🎯 <b>Timeframe Suitability:</b> {tf_score}/100
-🎓 <b>Asset Profile:</b> {asset_type}
+🎯 <b>Suitability Score:</b> {tf_score}/100
+
+🔍 <b>Detailed Analysis:</b>
+{reason_text}
 
 ⚠️ <b>Risk Factors:</b>
 • Squeeze Active: {squeeze_risk}
 • Volume Spike: {volume_risk}
-• Session Mismatch: {session_risk}
+• Session Risk: {session_risk}
 
-💡 <b>AI Recommendation:</b>
+💡 <b>Strategic Recommendation:</b>
 {recommendation}
 
 🎯 <b>Position Sizing:</b> {size_rec}
@@ -140,7 +150,7 @@ class BroadcastEngine:
 ⚠️ <b>High Risk Signals:</b>
 {risk_signals}
 
-📊 <b>Overall Market Sentiment:</b>
+📊 <b>Sentiment & Physics:</b>
 • Fear & Greed: {fear_greed}/100
 • Avg RVOL: {avg_rvol:.2f}x
 • Squeeze Count: {squeeze_count}
@@ -791,6 +801,18 @@ def analyze_asset_and_timeframe(symbol: str, timeframe: str, df: pd.DataFrame) -
         session_note = "🟢 Off-Hours - Use Caution"
         session_color = "#00e676"
     
+    # ENHANCED: Generate Reason Text
+    last = df.iloc[-1]
+    reasons = []
+    if last['n2_signal'] != 0: reasons.append("Nexus System Trigger")
+    if last['rvol'] > 2.0: reasons.append(f"Volume Surge ({last['rvol']:.1f}x)")
+    if last['in_squeeze']: reasons.append("Squeeze Breakout")
+    if abs(last['v3_flux']) > 0.6: reasons.append("Superconductor Physics")
+    if last['hyper_wave'] > 0 and last['is_bull']: reasons.append("HyperWave Momentum")
+    if not reasons: reasons.append("Trend Continuation")
+    
+    reason_text = " + ".join(reasons)
+
     return {
         "asset_profile": profile,
         "timeframe_score": tf_data["score"],
@@ -806,7 +828,8 @@ def analyze_asset_and_timeframe(symbol: str, timeframe: str, df: pd.DataFrame) -
         "session_note": session_note,
         "session_color": session_color,
         "recent_vol": recent_vol,
-        "avg_vol": avg_vol
+        "avg_vol": avg_vol,
+        "reason_text": reason_text # Added new detailed reason field
     }
 
 # =============================================================================
@@ -967,12 +990,22 @@ def generate_mobile_report(row, symbol, tf, fibs, fg_index, smart_stop,
 </div>
 ''')
 
+    # ENHANCED: Added Logic Section
+    html_parts.append(f'''
+<div class="report-card">
+    <div class="report-header">🧠 SIGNAL LOGIC</div>
+    <div class="report-item">{ai_analysis['reason_text']}</div>
+    <div class="report-item">Vector Flux: <span class="highlight">{row["v3_state"]}</span></div>
+    <div class="report-item">HyperWave: <span class="highlight">{'Active' if row['hyper_wave'] > 0 else 'Neutral'}</span></div>
+</div>
+''')
+
     # Flow & Vol card
     html_parts.append(f'''
 <div class="report-card">
     <div class="report-header">🌊 FLOW & VOL (Vector)</div>
     <div class="report-item">RVOL: <span class="highlight">{row["rvol"]:.2f} ({vol_desc})</span></div>
-    <div class="report-item">Flux: <span class="highlight">{row["v3_flux"]:.2f} ({row["v3_state"]})</span></div>
+    <div class="report-item">Flux: <span class="highlight">{row["v3_flux"]:.2f}</span></div>
     <div class="report-item">Money Flow: <span class="highlight">{row["money_flow"]:.2f}</span></div>
     <div class="report-item">VWAP: <span class="highlight">{'Above' if entry_price > float(row['vwap']) else 'Below'}</span></div>
 </div>
@@ -1249,9 +1282,6 @@ def run_engines(df, amp, dev, hma_l, tp1, tp2, tp3, mf_l, vol_l, gann_l, use_ml_
     cond_buy = (df['is_bull']) & (~df['is_bull'].shift(1).fillna(False)) & (df['rvol']>1.2) & (df['money_flow']>0)
     cond_sell = (~df['is_bull']) & (df['is_bull'].shift(1).fillna(True)) & (df['rvol']>1.2) & (df['money_flow']<0)
     
-    # Add Nexus Confirmation bonus (optional, but good for scoring)
-    # Here we keep base signals but use Nexus for confidence score
-    
     # ML Filter
     if use_ml_filter:
         df['ml_score'] = (df['rvol'] * 0.3 + (df['money_flow'] > 0) * 0.7)
@@ -1451,7 +1481,7 @@ if not st.session_state.broadcast_engine:
 
 # Header
 st.title("💠 TITAN-SIGNALS")
-st.caption("v20.1 | Enterprise Trading Engine + Fixed HTML Rendering")
+st.caption("v20.3 | Enterprise Trading Engine + Fixed HTML Rendering + Deep Analysis")
 
 # Mobile Clock
 components.html(
@@ -1671,10 +1701,12 @@ if not df.empty:
     # Broadcast handlers - FIXED: Check session state flags with proper keys
     if st.session_state.get("broadcast_strict_signal", False):
         if st.session_state.broadcast_engine and st.session_state.broadcast_engine.is_active():
+            # ENHANCED SIGNAL DATA
             signal_data = {
                 'direction': "LONG" if last['is_bull'] else "SHORT",
                 'entry_price': last['close'],
                 'stop_price': smart_stop,
+                'risk_pct': abs(last['close'] - smart_stop) / last['close'] * 100,
                 'tp1': last['tp1'],
                 'tp2': last['tp2'],
                 'tp3': last['tp3'],
@@ -1686,7 +1718,9 @@ if not df.empty:
                 'rvol': last['rvol'],
                 'squeeze_status': "ACTIVE" if last['in_squeeze'] else "CLEAR",
                 'ai_score': ai_analysis['signal_confidence'],
-                'signal_grade': "A+" if ai_analysis['signal_confidence'] > 80 else "B+"
+                'signal_grade': "A+" if ai_analysis['signal_confidence'] > 80 else "B+",
+                'trade_reason': ai_analysis['reason_text'], # Added Reason
+                'flux_state': last['v3_state'] # Added Flux State
             }
             st.session_state.broadcast_engine.queue_message('STRICT_SIGNAL', symbol, signal_data, priority=10)
             st.success("✅ Strict signal broadcast queued!")
@@ -1708,7 +1742,8 @@ if not df.empty:
                 'volume_risk': "YES" if last['rvol'] > 3 else "NO",
                 'session_risk': "YES" if "Off-Hours" in ai_analysis['session_note'] else "NO",
                 'recommendation': ai_analysis['recommendation'],
-                'size_rec': ai_analysis['size_recommendation']
+                'size_rec': ai_analysis['size_recommendation'],
+                'reason_text': ai_analysis['reason_text'] # Added Detailed Reason
             }
             st.session_state.broadcast_engine.queue_message('AI_RISK_ANALYSIS', symbol, ai_data, priority=5)
             st.success("✅ AI risk analysis broadcast queued!")
@@ -1809,10 +1844,12 @@ if not df.empty:
     with b_col1:
         if st.button("🔥 ALERT TG", use_container_width=True):
             if st.session_state.broadcast_engine and st.session_state.broadcast_engine.is_active():
+                # ENHANCED SIGNAL DATA WITH REASONS
                 signal_data = {
                     'direction': "LONG" if last['is_bull'] else "SHORT",
                     'entry_price': last['close'],
                     'stop_price': smart_stop,
+                    'risk_pct': abs(last['close'] - smart_stop) / last['close'] * 100,
                     'tp1': last['tp1'],
                     'tp2': last['tp2'],
                     'tp3': last['tp3'],
@@ -1824,7 +1861,9 @@ if not df.empty:
                     'rvol': last['rvol'],
                     'squeeze_status': "ACTIVE" if last['in_squeeze'] else "CLEAR",
                     'ai_score': ai_analysis['signal_confidence'],
-                    'signal_grade': "A+" if ai_analysis['signal_confidence'] > 80 else "B+"
+                    'signal_grade': "A+" if ai_analysis['signal_confidence'] > 80 else "B+",
+                    'trade_reason': ai_analysis['reason_text'], # Added Reason
+                    'flux_state': last['v3_state'] # Added Flux State
                 }
                 st.session_state.broadcast_engine.queue_message('STRICT_SIGNAL', symbol, signal_data, priority=10)
                 st.success("✅ Broadcast queued!")
@@ -1860,7 +1899,8 @@ Trade Mgmt: {trail_status}
                     'volume_risk': "YES" if last['rvol'] > 3 else "NO",
                     'session_risk': "YES" if "Off-Hours" in ai_analysis['session_note'] else "NO",
                     'recommendation': f"SIGNAL: {symbol} {'LONG' if last['is_bull'] else 'SHORT'}",
-                    'size_rec': f"Entry: {last['close']:.4f} | Stop: {smart_stop:.4f}"
+                    'size_rec': f"Entry: {last['close']:.4f} | Stop: {smart_stop:.4f}",
+                    'reason_text': ai_analysis['reason_text']
                 }
                 st.session_state.broadcast_engine.queue_message('AI_RISK_ANALYSIS', symbol, ai_data, priority=5)
                 st.success("📋 Report queued!")
