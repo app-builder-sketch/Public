@@ -1462,6 +1462,14 @@ if not st.session_state.broadcast_engine:
 # Fetch data
 df = get_klines(symbol, timeframe, limit)
 
+# Initialize session state flags for broadcast buttons if not exist
+if "broadcast_strict_signal" not in st.session_state:
+    st.session_state.broadcast_strict_signal = False
+if "broadcast_ai_analysis" not in st.session_state:
+    st.session_state.broadcast_ai_analysis = False
+if "broadcast_market_summary" not in st.session_state:
+    st.session_state.broadcast_market_summary = False
+
 if not df.empty:
     df = df.dropna(subset=['close'])
     df = run_engines(df, int(amplitude), channel_dev, int(hma_len), tp1_r, tp2_r, tp3_r, 
@@ -1510,6 +1518,7 @@ if not df.empty:
             }
             st.session_state.broadcast_engine.queue_message('STRICT_SIGNAL', symbol, signal_data, priority=10)
             st.success("✅ Strict signal broadcast queued!")
+            st.toast(f"🚀 Sent {symbol} strict signal", icon="✅")
         else:
             st.error("❌ Broadcast engine not active!")
         st.session_state.broadcast_strict_signal = False
@@ -1531,6 +1540,7 @@ if not df.empty:
             }
             st.session_state.broadcast_engine.queue_message('AI_RISK_ANALYSIS', symbol, ai_data, priority=5)
             st.success("✅ AI risk analysis broadcast queued!")
+            st.toast(f"🤖 Sent {symbol} AI analysis", icon="✅")
         else:
             st.error("❌ Broadcast engine not active!")
         st.session_state.broadcast_ai_analysis = False
@@ -1538,6 +1548,7 @@ if not df.empty:
     if st.session_state.get("broadcast_market_summary", False):
         if st.session_state.broadcast_engine and st.session_state.broadcast_engine.is_active():
             summary_data = {
+                'timestamp': datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S'),
                 'top_performers': "BTC: +2.3%, ETH: +1.8%, SOL: +4.1%",
                 'risk_signals': "DOGE: High Vol, SHIB: Squeeze Active",
                 'fear_greed': fg_index,
@@ -1548,6 +1559,7 @@ if not df.empty:
             }
             st.session_state.broadcast_engine.queue_message('MARKET_SUMMARY', "MULTI", summary_data, priority=3)
             st.success("✅ Market summary broadcast queued!")
+            st.toast(f"📊 Sent market summary", icon="✅")
         else:
             st.error("❌ Broadcast engine not active!")
         st.session_state.broadcast_market_summary = False
@@ -1645,9 +1657,9 @@ if not df.empty:
                 st.session_state.broadcast_engine.queue_message('STRICT_SIGNAL', symbol, signal_data, priority=10)
                 st.success("✅ Broadcast queued!")
             else:
-                # Fallback to legacy
+                # Fallback
                 msg = f"TITAN SIGNAL: {symbol} | {'LONG' if last['is_bull'] else 'SHORT'} | EP: {last['close']:.4f} | Score: {ai_analysis['signal_confidence']}/100"
-                if send_telegram_msg(tg_token, tg_chat, msg):
+                if send_telegram_msg(st.secrets.get("TELEGRAM_TOKEN", ""), st.secrets.get("TELEGRAM_CHAT_ID", ""), msg):
                     st.success("SENT")
                 else:
                     st.error("FAIL")
@@ -1683,7 +1695,7 @@ Trade Mgmt: {trail_status}
             else:
                 # Fallback
                 msg = f"REPORT: {symbol} | Stop: {smart_stop:.4f} | Trail: {trailing_stop:.4f} | {trail_status}"
-                if send_telegram_msg(tg_token, tg_chat, msg):
+                if send_telegram_msg(st.secrets.get("TELEGRAM_TOKEN", ""), st.secrets.get("TELEGRAM_CHAT_ID", ""), msg):
                     st.success("SENT")
                 else:
                     st.error("FAIL")
@@ -1694,6 +1706,8 @@ Trade Mgmt: {trail_status}
             if b_total > 0:
                 if st.session_state.broadcast_engine and st.session_state.broadcast_engine.is_active():
                     bt_data = {
+                        'symbol': symbol,
+                        'timeframe': timeframe,
                         'total_trades': b_total,
                         'win_rate': b_win,
                         'net_pnl': b_net,
@@ -1708,7 +1722,7 @@ Trade Mgmt: {trail_status}
                     st.success("📊 Backtest queued!")
                 else:
                     msg = f"BACKTEST: {symbol} | Trades: {b_total} | Win: {b_win:.1f}% | Net: {b_net:.2f}R"
-                    if send_telegram_msg(tg_token, tg_chat, msg):
+                    if send_telegram_msg(st.secrets.get("TELEGRAM_TOKEN", ""), st.secrets.get("TELEGRAM_CHAT_ID", ""), msg):
                         st.success("SENT")
                     else:
                         st.error("FAIL")
@@ -1916,6 +1930,6 @@ atexit.register(cleanup)
 # Show current broadcast engine status in logs
 if st.session_state.broadcast_engine:
     logger.info(f"App loaded - Broadcast engine active: {st.session_state.broadcast_engine.is_active()}")
-    logger.info(f"Queue size: {len(st.session_state.broadcast_engine.message_queue)}")
+    logger.info(f"Queue size: {len(st.session_state.broadcast_engine.message_queue) if hasattr(st.session_state.broadcast_engine, 'message_queue') else 'N/A'}")
 else:
     logger.info("App loaded - No broadcast engine initialized")
