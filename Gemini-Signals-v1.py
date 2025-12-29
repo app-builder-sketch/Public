@@ -1,6 +1,6 @@
 """
 Signals-MOBILE 
-Version 20.3: Enterprise-Grade Trading Engine + Deep Analysis Logic + Apex Trinity
+Version 20.4: Enterprise-Grade Trading Engine + Deep Analysis + Complex Trailing Logic
 """
 
 import time
@@ -90,13 +90,14 @@ class BroadcastEngine:
     
     REPORT_TYPES = {
         'STRICT_SIGNAL': 'strict_signal',
+        'COMPLEX_SIGNAL': 'complex_signal', # Added new type
         'AI_RISK_ANALYSIS': 'ai_risk_analysis', 
         'MARKET_SUMMARY': 'market_summary',
         'BACKTEST_REPORT': 'backtest_report'
     }
     
     # FIXED: Converted to HTML templates for reliable delivery
-    # ENHANCED: Added deep analysis fields
+    # ENHANCED: Added deep analysis fields and Complex Trailing Logic
     TEMPLATES = {
         'strict_signal': """🔥 <b>TITAN TRADE ALERT</b> 🔥
 
@@ -119,6 +120,31 @@ class BroadcastEngine:
 
 🤖 AI Confidence: {ai_score}/100
 ⏰ {timestamp} UTC""",
+
+        'complex_signal': """⚡ <b>TITAN COMPLEX SIGNAL</b> ⚡
+<i>Advanced Trade Management Protocol</i>
+
+📊 <b>{symbol}</b> | {timeframe}
+🎯 <b>{direction}</b> | Grade: {signal_grade}
+💰 Entry: {entry_price:.4f}
+
+🛑 <b>Initial Stop:</b> {stop_price:.4f}
+⚠️ <b>Max Risk:</b> {risk_pct:.2f}%
+
+🔄 <b>DYNAMIC TRAILING LOGIC:</b>
+{trailing_plan}
+
+📈 <b>Take Profit Structure:</b>
+1️⃣ TP1: {tp1:.4f} ({tp1_r}R)
+2️⃣ TP2: {tp2:.4f} ({tp2_r}R)
+3️⃣ TP3: {tp3:.4f} ({tp3_r}R)
+
+🧠 <b>Market Mechanics:</b>
+• Nexus State: {nexus_state}
+• Vector Flux: {flux_val:.2f} ({flux_state})
+• Efficiency: {efficiency:.1f}%
+
+<i>Generated: {timestamp} UTC</i>""",
         
         'ai_risk_analysis': """🤖 <b>AI DEEP DIVE</b> | {symbol}
 
@@ -329,7 +355,7 @@ class BroadcastEngine:
         """Format message according to report type"""
         try:
             template_key = self.REPORT_TYPES.get(message.report_type, 'strict_signal')
-            template = self.TEMPLATES[template_key]
+            template = self.TEMPLATES.get(template_key, self.TEMPLATES['strict_signal'])
             
             # FIXED: HTML escape strings to prevent broken tags
             safe_data = {}
@@ -1481,7 +1507,7 @@ if not st.session_state.broadcast_engine:
 
 # Header
 st.title("💠 TITAN-SIGNALS")
-st.caption("v20.3 | Enterprise Trading Engine + Fixed HTML Rendering + Deep Analysis")
+st.caption("v20.4 | Enterprise Trading Engine + Fixed HTML Rendering + Deep Analysis")
 
 # Mobile Clock
 components.html(
@@ -1620,11 +1646,18 @@ with st.sidebar:
             # FIXED: Use proper session state keys with unique prefixes
             if "broadcast_strict_signal" not in st.session_state:
                 st.session_state.broadcast_strict_signal = False
+            if "broadcast_complex_signal" not in st.session_state: # ADDED
+                st.session_state.broadcast_complex_signal = False
             if "broadcast_ai_analysis" not in st.session_state:
                 st.session_state.broadcast_ai_analysis = False
             if "broadcast_market_summary" not in st.session_state:
                 st.session_state.broadcast_market_summary = False
             
+            # NEW: Complex Signal Button Row
+            if st.button("⚡ COMPLEX SIGNAL (WITH TRAILING)", use_container_width=True, type="secondary"):
+                st.session_state.broadcast_complex_signal = True
+                st.toast("✅ Complex signal queued!", icon='⚡')
+
             col_btn1, col_btn2 = st.columns([1, 1])
             with col_btn1:
                 if st.button("🔥 STRICT SIGNAL", use_container_width=True):
@@ -1667,6 +1700,8 @@ df = get_klines(symbol, timeframe, limit)
 # Initialize session state flags for broadcast buttons if not exist
 if "broadcast_strict_signal" not in st.session_state:
     st.session_state.broadcast_strict_signal = False
+if "broadcast_complex_signal" not in st.session_state: # ADDED
+    st.session_state.broadcast_complex_signal = False
 if "broadcast_ai_analysis" not in st.session_state:
     st.session_state.broadcast_ai_analysis = False
 if "broadcast_market_summary" not in st.session_state:
@@ -1699,9 +1734,10 @@ if not df.empty:
         db.save_signal(symbol, last.to_dict())
     
     # Broadcast handlers - FIXED: Check session state flags with proper keys
+    
+    # HANDLER 1: STRICT SIGNAL
     if st.session_state.get("broadcast_strict_signal", False):
         if st.session_state.broadcast_engine and st.session_state.broadcast_engine.is_active():
-            # ENHANCED SIGNAL DATA
             signal_data = {
                 'direction': "LONG" if last['is_bull'] else "SHORT",
                 'entry_price': last['close'],
@@ -1728,7 +1764,47 @@ if not df.empty:
         else:
             st.error("❌ Broadcast engine not active!")
         st.session_state.broadcast_strict_signal = False
+
+    # HANDLER 2: COMPLEX SIGNAL (NEW)
+    if st.session_state.get("broadcast_complex_signal", False):
+        if st.session_state.broadcast_engine and st.session_state.broadcast_engine.is_active():
+            # Build trailing logic string dynamically
+            trail_desc = []
+            if use_trailing:
+                trail_desc.append(f"• <b>Step 1:</b> Price hits TP1 ({last['tp1']:.4f}) -> Move Stop to Breakeven ({last['close']:.4f})")
+                trail_desc.append(f"• <b>Step 2:</b> Price hits TP2 ({last['tp2']:.4f}) -> Move Stop to TP1 ({last['tp1']:.4f})")
+                trail_desc.append(f"• <b>Step 3:</b> Price hits TP3 ({last['tp3']:.4f}) -> Move Stop to TP2 ({last['tp2']:.4f})")
+                trail_desc.append("• <b>Runner:</b> Trail remaining position with structure.")
+            else:
+                trail_desc.append("• <b>Static Mode:</b> Hard Stop and Targets. No trailing active.")
+
+            signal_data = {
+                'direction': "LONG" if last['is_bull'] else "SHORT",
+                'entry_price': last['close'],
+                'stop_price': smart_stop,
+                'risk_pct': abs(last['close'] - smart_stop) / last['close'] * 100,
+                'tp1': last['tp1'],
+                'tp2': last['tp2'],
+                'tp3': last['tp3'],
+                'tp1_r': tp1_r,
+                'tp2_r': tp2_r,
+                'tp3_r': tp3_r,
+                'timeframe': timeframe,
+                'signal_grade': "A+" if ai_analysis['signal_confidence'] > 80 else "B+",
+                'trailing_plan': "\n".join(trail_desc), # Detailed trailing logic
+                'nexus_state': "BULL" if last['n2_signal'] == 1 else ("BEAR" if last['n2_signal'] == -1 else "NEUTRAL"),
+                'flux_val': last['v3_flux'],
+                'flux_state': last['v3_state'],
+                'efficiency': last['v3_efficiency'] * 100
+            }
+            st.session_state.broadcast_engine.queue_message('COMPLEX_SIGNAL', symbol, signal_data, priority=10)
+            st.success("✅ Complex signal broadcast queued!")
+            st.toast(f"⚡ Sent {symbol} complex signal", icon="✅")
+        else:
+            st.error("❌ Broadcast engine not active!")
+        st.session_state.broadcast_complex_signal = False
     
+    # HANDLER 3: AI ANALYSIS
     if st.session_state.get("broadcast_ai_analysis", False):
         if st.session_state.broadcast_engine and st.session_state.broadcast_engine.is_active():
             ai_data = {
@@ -1752,6 +1828,7 @@ if not df.empty:
             st.error("❌ Broadcast engine not active!")
         st.session_state.broadcast_ai_analysis = False
     
+    # HANDLER 4: MARKET SUMMARY
     if st.session_state.get("broadcast_market_summary", False):
         if st.session_state.broadcast_engine and st.session_state.broadcast_engine.is_active():
             summary_data = {
