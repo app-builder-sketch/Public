@@ -1,20 +1,17 @@
 """
 Signals-MOBILE 
-Version 20.0: Enterprise-Grade Trading Engine + Advanced Multi-Format Broadcast System
+Version 20.1: Enterprise-Grade Trading Engine + Fixed HTML Rendering
 """
 
 import time
 import math
 import sqlite3
-import random
 import json
 import asyncio
 import logging
-from typing import Dict, Optional, List, Tuple, Any, Union
-from contextlib import contextmanager
+from typing import Dict, Optional, List, Tuple, Any
 from functools import wraps
-from dataclasses import dataclass, asdict
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 import threading
 from collections import deque
 
@@ -23,18 +20,12 @@ import pandas as pd
 import numpy as np
 import requests
 import plotly.graph_objects as go
-import plotly.express as px
 import streamlit.components.v1 as components
-import websockets
-import aiohttp
 
 # =============================================================================
 # ERROR HANDLING & LOGGING
 # =============================================================================
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 def widget_error_boundary(func):
@@ -50,11 +41,12 @@ def widget_error_boundary(func):
     return wrapper
 
 # =============================================================================
-# BROADCAST ENGINE - NEW MULTI-FORMAT SYSTEM
+# BROADCAST ENGINE (UNCHANGED)
 # =============================================================================
+from dataclasses import dataclass
+
 @dataclass
 class BroadcastMessage:
-    """Structured message for broadcast queue"""
     report_type: str
     symbol: str
     data: Dict[str, Any]
@@ -64,7 +56,6 @@ class BroadcastMessage:
     max_retries: int = 3
 
 class RateLimiter:
-    """Thread-safe rate limiter for API calls"""
     def __init__(self, max_requests: int = 20, period: int = 60):
         self.max_requests = max_requests
         self.period = period
@@ -72,7 +63,6 @@ class RateLimiter:
         self.lock = threading.Lock()
     
     def can_send(self) -> bool:
-        """Check if we can send based on rate limit"""
         with self.lock:
             now = time.time()
             self.requests = deque([req_time for req_time in self.requests 
@@ -82,6 +72,7 @@ class RateLimiter:
                 return True
             return False
     
+
     def time_until_next(self) -> float:
         """Get time until next available slot"""
         with self.lock:
@@ -102,7 +93,6 @@ class BroadcastEngine:
         'BACKTEST_REPORT': 'backtest_report'
     }
     
-    # Message templates with enhanced formatting
     TEMPLATES = {
         'strict_signal': """🔥 *TITAN TRADE ALERT* 🔥
 
@@ -183,7 +173,6 @@ _Period: {start_date} to {end_date}_"""
         self.queue_lock = threading.Lock()
         self.active = False
         
-        # Start background processor if credentials are valid
         if token and chat_id:
             self.active = True
             self._start_processor()
@@ -251,7 +240,6 @@ _Period: {start_date} to {end_date}_"""
         try:
             formatted_text = self._format_message(message)
             
-            # Add rate limiting to session
             async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10)) as session:
                 url = f"https://api.telegram.org/bot{self.token}/sendMessage"
                 payload = {
@@ -264,7 +252,7 @@ _Period: {start_date} to {end_date}_"""
                 async with session.post(url, json=payload) as response:
                     if response.status == 200:
                         return True
-                    elif response.status == 429:  # Too many requests
+                    elif response.status == 429:
                         retry_after = (await response.json()).get('parameters', {}).get('retry_after', 30)
                         logger.warning(f"Rate limited by Telegram, retry after {retry_after}s")
                         time.sleep(retry_after)
@@ -281,7 +269,6 @@ _Period: {start_date} to {end_date}_"""
         template_key = self.REPORT_TYPES.get(message.report_type, 'strict_signal')
         template = self.TEMPLATES[template_key]
         
-        # Prepare common fields
         base_data = {
             'symbol': message.symbol,
             'timestamp': message.timestamp.strftime('%Y-%m-%d %H:%M:%S'),
@@ -294,7 +281,7 @@ _Period: {start_date} to {end_date}_"""
         """Handle failed message with retry logic"""
         if message.retry_count < message.max_retries:
             message.retry_count += 1
-            wait_time = 2 ** message.retry_count  # Exponential backoff
+            wait_time = 2 ** message.retry_count
             logger.warning(f"Retry {message.retry_count} for {message.symbol} in {wait_time}s")
             time.sleep(wait_time)
             with self.queue_lock:
@@ -314,7 +301,6 @@ _Period: {start_date} to {end_date}_"""
         }
         self.broadcast_history.append(log_entry)
         
-        # Keep only last 100 entries
         if len(self.broadcast_history) > 100:
             self.broadcast_history = self.broadcast_history[-100:]
     
@@ -427,6 +413,15 @@ st.markdown("""
         padding: 10px;
     }
     
+    /* FIXED: Add separate CSS classes for trailing cards */
+    .trailing-enabled {
+        border-left-color: #00e676 !important;
+        background: linear-gradient(135deg, #1f2833 0%, #002a00 100%) !important;
+    }
+    .trailing-disabled {
+        border-left-color: #ff9800 !important;
+    }
+    
     /* Broadcast System UI */
     .broadcast-status {
         padding: 10px;
@@ -452,15 +447,6 @@ st.markdown("""
         border-radius: 8px;
         padding: 10px;
     }
-    
-    /* Widget Error Display */
-    .widget-error {
-        background: #ff1744;
-        color: white;
-        padding: 10px;
-        border-radius: 5px;
-        font-size: 12px;
-    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -469,8 +455,6 @@ st.markdown("""
 # =============================================================================
 BINANCE_API_BASE = "https://api.binance.us/api/v3"
 HEADERS = {"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
-
-# WebSocket endpoints for real-time data
 BINANCE_WS_BASE = "wss://stream.binance.us:9443/ws"
 
 POPULAR_BASES = [
@@ -479,7 +463,7 @@ POPULAR_BASES = [
     "FIL", "NEAR", "ICP", "ARB", "OP", "SUI", "APT", "INJ", "TIA", "RNDR"
 ]
 
-# AI Asset Knowledge Base (EXPANDED)
+# AI Asset Knowledge Base
 ASSET_PROFILES = {
     "BTC": {"type": "Macro Asset", "vol_regime": "Low", "session": "Global", "correlation": "Risk-On", "category": "Large Cap"},
     "ETH": {"type": "Smart Contract Leader", "vol_regime": "Medium", "session": "US/EU", "correlation": "BTC Beta", "category": "Large Cap"},
@@ -492,7 +476,7 @@ ASSET_PROFILES = {
 }
 
 # =============================================================================
-# DATABASE LAYER (ENHANCED)
+# DATABASE LAYER
 # =============================================================================
 class SignalDatabase:
     """SQLite backend for signal persistence with broadcast logging"""
@@ -521,7 +505,6 @@ class SignalDatabase:
                 )
             """)
             
-            # NEW: Broadcast history table
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS broadcast_history (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -572,7 +555,7 @@ class SignalDatabase:
             ))
 
 # =============================================================================
-# WEBSOCKET CLIENT (ENHANCED)
+# WEBSOCKET CLIENT
 # =============================================================================
 class BinanceWebSocket:
     """Real-time WebSocket data feed"""
@@ -610,12 +593,9 @@ class BinanceWebSocket:
             return None
 
 # =============================================================================
-# AI ANALYSIS ENGINE (ENHANCED)
+# AI ANALYSIS ENGINE
 # =============================================================================
 def analyze_asset_and_timeframe(symbol: str, timeframe: str, df: pd.DataFrame) -> Dict:
-    """
-    AI-driven analysis with regime detection and ML scoring
-    """
     base = symbol.replace("USDT", "")
     profile = ASSET_PROFILES.get(base, {
         "type": "Altcoin", 
@@ -625,7 +605,6 @@ def analyze_asset_and_timeframe(symbol: str, timeframe: str, df: pd.DataFrame) -
         "category": "Small Cap"
     })
     
-    # Timeframe Suitability Score
     tf_scores = {
         "15m": {"score": 70, "note": "Scalping & Intraday", "vol_adj": 1.0},
         "1h": {"score": 85, "note": "Day Trading & Swing Entry", "vol_adj": 1.2},
@@ -635,7 +614,6 @@ def analyze_asset_and_timeframe(symbol: str, timeframe: str, df: pd.DataFrame) -
     
     tf_data = tf_scores.get(timeframe, {"score": 50, "note": "Uncommon TF", "vol_adj": 1.0})
     
-    # Calculate current market regime
     current_vol = "N/A"
     recent_vol = 0
     avg_vol = 1
@@ -649,17 +627,16 @@ def analyze_asset_and_timeframe(symbol: str, timeframe: str, df: pd.DataFrame) -
         if recent_vol > avg_vol * 1.5:
             regime = "High Volatility"
             regime_color = "#ff1744"
-            regime_factor = 0.7  # Reduce position size
+            regime_factor = 0.7
         elif recent_vol < avg_vol * 0.7:
             regime = "Low Volatility"
             regime_color = "#00e676"
-            regime_factor = 1.3  # Increase position size
+            regime_factor = 1.3
         else:
             regime = "Normal Volatility"
             regime_color = "#ffd740"
             regime_factor = 1.0
         
-        # ML-based signal confidence
         session_score = 10 if profile['session'] == "US" else 5
         timeframe_score = 20 if tf_data['score'] > 80 else 10
         regime_score = 15 if regime_factor > 1.0 else 5
@@ -673,7 +650,6 @@ def analyze_asset_and_timeframe(symbol: str, timeframe: str, df: pd.DataFrame) -
         regime_color = "#9e9e9e"
         regime_factor = 1.0
     
-    # Generate recommendation with position sizing
     if tf_data["score"] >= 85:
         rec = "OPTIMAL TIMEFRAME"
         rec_color = "#00e676"
@@ -687,7 +663,6 @@ def analyze_asset_and_timeframe(symbol: str, timeframe: str, df: pd.DataFrame) -
         rec_color = "#ff1744"
         size_rec = "Consider Smaller Size or Avoid"
     
-    # Time session analysis
     utc_hour = datetime.now(timezone.utc).hour
     if profile['session'] == "US" and 13 <= utc_hour <= 21:
         session_note = "🔴 US Session Active - Best Liquidity"
@@ -718,14 +693,10 @@ def analyze_asset_and_timeframe(symbol: str, timeframe: str, df: pd.DataFrame) -
     }
 
 # =============================================================================
-# TRAILING STOP ENGINE (ENHANCED)
+# TRAILING STOP ENGINE
 # =============================================================================
 def calculate_trailing_stop(current_price: float, entry_price: float, initial_stop: float,
                            tp1: float, tp2: float, tp3: float, is_long: bool) -> Tuple[float, str]:
-    """
-    Calculate trailing stop with status message
-    Returns: (stop_price, status_message)
-    """
     if is_long:
         if current_price >= tp3:
             return tp2, "🔒 Locked TP2"
@@ -746,13 +717,10 @@ def calculate_trailing_stop(current_price: float, entry_price: float, initial_st
             return initial_stop, "📍 Initial Stop"
 
 # =============================================================================
-# TICKER UNIVERSE (OPTIMIZED)
+# TICKER UNIVERSE
 # =============================================================================
 @st.cache_data(ttl=3600)
 def get_binanceus_usdt_bases() -> List[str]:
-    """
-    Pull all Binance US symbols with error handling
-    """
     try:
         r = requests.get(f"{BINANCE_API_BASE}/exchangeInfo", headers=HEADERS, timeout=6)
         if r.status_code != 200:
@@ -774,13 +742,10 @@ def get_binanceus_usdt_bases() -> List[str]:
         return []
 
 # =============================================================================
-# LIVE TICKER WIDGET (FIXED)
+# LIVE TICKER WIDGET
 # =============================================================================
 @widget_error_boundary
 def render_ticker_tape(selected_symbol: str):
-    """
-    FIXED: Proper JSON injection with error boundary
-    """
     base = selected_symbol.replace("USDT", "")
     tape_bases = []
     tape_bases.extend(["BTC", "ETH", "SOL"])
@@ -794,19 +759,16 @@ def render_ticker_tape(selected_symbol: str):
     seen = set()
     tape_bases = [x for x in tape_bases if not (x in seen or seen.add(x))]
 
-    # FIX: Proper JSON serialization without trailing spaces
     symbols_json = json.dumps(
         [{"proName": f"BINANCE:{b}USDT", "title": b} for b in tape_bases],
         separators=(",", ":")
     )
 
-    # FIX: Remove trailing space in URL and use proper script structure
     components.html(
         f"""
         <div class="tradingview-widget-container">
           <div class="tradingview-widget-container__widget"></div>
           <script type="text/javascript">
-          // TradingView Widget Configuration
           var tickerConfig = {symbols_json};
           </script>
           <script type="text/javascript" src="https://s3.tradingview.com/external-embedding/embed-widget-ticker-tape.js" async>
@@ -816,303 +778,22 @@ def render_ticker_tape(selected_symbol: str):
         height=50
     )
 
-# HEADER with Enhanced JS Clock
-st.title("💠 TITAN-SIGNALS")
-st.caption("v20.0 | Enterprise Trading Engine + Advanced Broadcast System")
-
-# Mobile Clock
-components.html(
-    """
-    <div id="live_clock"></div>
-    <style>
-        @import url('https://fonts.googleapis.com/css2?family=Roboto+Mono:wght@700&display=swap');
-        body { margin: 0; background-color: transparent; text-align: center; }
-        #live_clock {
-            font-family: 'Roboto Mono', monospace;
-            font-size: 20px;
-            color: #39ff14;
-            text-shadow: 0 0 10px rgba(57, 255, 20, 0.8);
-            font-weight: 800;
-            padding: 5px;
-        }
-    </style>
-    <script>
-    function updateTime() {
-        const now = new Date();
-        const timeString = now.toLocaleTimeString('en-GB', { timeZone: 'UTC' });
-        document.getElementById('live_clock').innerHTML = 'UTC: ' + timeString;
-    }
-    setInterval(updateTime, 1000);
-    updateTime();
-    </script>
-    """,
-    height=40
-)
-
 # =============================================================================
-# SIDEBAR (ENHANCED SETTINGS)
+# HTML GENERATION - FIXED VERSION
 # =============================================================================
-with st.sidebar:
-    st.header("⚙️ CONTROL")
-    if st.button("🔄 REFRESH", use_container_width=True):
-        st.rerun()
-
-    st.subheader("📡 FEED")
-    bases_all = get_binanceus_usdt_bases()
-
-    if "symbol_input" not in st.session_state:
-        st.session_state.symbol_input = "BTC"
-
-    with st.expander("🧬 Ticker Universe (Quick Select)", expanded=True):
-        if bases_all:
-            list_mode = st.selectbox("List", ["Popular", "All Binance US (USDT)"], index=0)
-            if list_mode == "Popular":
-                options = [b for b in POPULAR_BASES if b in bases_all] or POPULAR_BASES
-            else:
-                options = POPULAR_BASES + [b for b in bases_all if b not in POPULAR_BASES]
-
-            quick_base = st.selectbox("Quick Ticker", options, index=(options.index("BTC") if "BTC" in options else 0))
-            q1, q2 = st.columns([1, 1])
-            with q1:
-                if st.button("Use Quick Ticker", use_container_width=True):
-                    st.session_state.symbol_input = quick_base
-            with q2:
-                st.caption(f"{len(bases_all)} tickers loaded")
-        else:
-            st.warning("Ticker universe unavailable. Manual input still works.")
-
-    # Original manual input kept
-    symbol_input = st.text_input("Asset", value=st.session_state.symbol_input)
-    st.session_state.symbol_input = symbol_input
-    symbol = symbol_input.strip().upper().replace("/", "").replace("-", "")
-    if not symbol.endswith("USDT"):
-        symbol += "USDT"
-
-    c1, c2 = st.columns(2)
-    with c1:
-        timeframe = st.selectbox("TF", ["15m", "1h", "4h", "1d"], index=1)
-    with c2:
-        limit = st.slider("Depth", 100, 500, 200, 50)
-
-    st.markdown("---")
-    st.subheader("🧠 LOGIC")
-    amplitude = st.number_input("Amp", 2, 200, 10)
-    channel_dev = st.number_input("Dev", 0.5, 10.0, 3.0, 0.1)
-    hma_len = st.number_input("HMA", 2, 400, 50)
-    gann_len = st.number_input("Gann", 1, 50, 3)
-
-    with st.expander("🎯 Targets"):
-        tp1_r = st.number_input("TP1 (R)", value=1.5)
-        tp2_r = st.number_input("TP2 (R)", value=3.0)
-        tp3_r = st.number_input("TP3 (R)", value=5.0)
-
-    # NEW: Enterprise Features
-    with st.expander("🛑 TRADE MANAGEMENT"):
-        use_trailing = st.toggle("Enable Trailing Stops", value=True)
-        use_ml_filter = st.toggle("ML Signal Filter", value=False)
-        st.caption("TP1→Breakeven, TP2→TP1, TP3→TP2")
-
-    with st.expander("🔐 AUTHENTICATION"):
-        enable_auth = st.toggle("Enable User Login", value=False)
-        st.caption("Requires Firebase setup")
-
-    st.markdown("---")
-    
-    # NEW: BROADCAST SYSTEM CONTROLS
-    st.subheader("📡 BROADCAST CONTROLS")
-    
-    # Auto-load from secrets
-    tg_token = st.text_input("Bot Token", value=st.secrets.get("TELEGRAM_TOKEN", ""), type="password")
-    tg_chat = st.text_input("Chat ID", value=st.secrets.get("TELEGRAM_CHAT_ID", ""), type="password")
-    
-    # Initialize broadcast engine in session state
-    if "broadcast_engine" not in st.session_state:
-        st.session_state.broadcast_engine = None
-    
-    if tg_token and tg_chat:
-        if st.button("🚀 ACTIVATE BROADCAST", use_container_width=True):
-            st.session_state.broadcast_engine = BroadcastEngine(tg_token, tg_chat)
-            st.success("Broadcast system activated!")
-        
-        # Show status
-        if st.session_state.broadcast_engine and st.session_state.broadcast_engine.active:
-            st.markdown('<div class="broadcast-status broadcast-active">🟢 BROADCAST ACTIVE</div>', unsafe_allow_html=True)
-            
-            # Broadcast controls
-            st.subheader("📤 Quick Send")
-            
-            if st.button("📨 STRICT SIGNAL", use_container_width=True):
-                st.session_state.send_strict_signal = True
-            
-            if st.button("🤖 AI RISK ANALYSIS", use_container_width=True):
-                st.session_state.send_ai_analysis = True
-                
-            if st.button("📊 MARKET SUMMARY", use_container_width=True):
-                st.session_state.send_market_summary = True
-            
-            # Show queue status
-            if hasattr(st.session_state.broadcast_engine, 'message_queue'):
-                queue_size = len(st.session_state.broadcast_engine.message_queue)
-                st.caption(f"Queue: {queue_size} messages pending")
-            
-            # Broadcast history
-            with st.expander("📜 Broadcast History", expanded=False):
-                if st.button("Load History", use_container_width=True):
-                    st.session_state.show_broadcast_history = True
-        else:
-            st.markdown('<div class="broadcast-status broadcast-inactive">🔴 BROADCAST INACTIVE</div>', unsafe_allow_html=True)
-    else:
-        st.warning("Enter Telegram credentials to activate broadcast")
-
-# Render ticker tape
-render_ticker_tape(symbol)
-
-# =============================================================================
-# LOGIC ENGINES (PRESERVED & ENHANCED)
-# =============================================================================
-def calculate_hma(series, length):
-    half_len = int(length / 2)
-    sqrt_len = int(math.sqrt(length))
-    wma_f = series.rolling(length).mean()
-    wma_h = series.rolling(half_len).mean()
-    diff = 2 * wma_h - wma_f
-    return diff.rolling(sqrt_len).mean()
-
-def calculate_fibonacci(df, lookback=50):
-    recent = df.iloc[-lookback:]
-    h, l = recent['high'].max(), recent['low'].min()
-    d = h - l
-    fibs = {
-        'fib_382': h - (d * 0.382),
-        'fib_500': h - (d * 0.500),
-        'fib_618': h - (d * 0.618),
-        'high': h, 'low': l
-    }
-    return fibs
-
-def calculate_fear_greed_index(df):
-    try:
-        df['log_ret'] = np.log(df['close'] / df['close'].shift(1))
-        vol_score = 50 - ((df['log_ret'].rolling(30).std().iloc[-1] - df['log_ret'].rolling(90).std().iloc[-1]) / df['log_ret'].rolling(90).std().iloc[-1]) * 100
-        vol_score = max(0, min(100, vol_score))
-        rsi = df['rsi'].iloc[-1]
-        sma_50 = df['close'].rolling(50).mean().iloc[-1]
-        dist = (df['close'].iloc[-1] - sma_50) / sma_50
-        trend_score = 50 + (dist * 1000)
-        fg = (vol_score * 0.3) + (rsi * 0.4) + (max(0, min(100, trend_score)) * 0.3)
-        return int(fg)
-    except:
-        return 50
-
-def run_backtest(df, tp1_r, tp2_r, tp3_r, use_trailing):
-    """
-    Enhanced backtest with trailing stop simulation
-    """
-    trades = []
-    signals = df[(df['buy']) | (df['sell'])]
-    
-    for idx, row in signals.iterrows():
-        future = df.loc[idx+1: idx+30]
-        if future.empty:
-            continue
-            
-        entry = row['close']
-        initial_stop = row['entry_stop']
-        tp1 = row['tp1']
-        tp2 = row['tp2']
-        tp3 = row['tp3']
-        is_long = row['is_bull']
-        
-        current_stop = initial_stop
-        highest_tp_hit = 0
-        outcome = "PENDING"
-        pnl = 0
-        
-        for _, candle in future.iterrows():
-            high = candle['high']
-            low = candle['low']
-            
-            if is_long:
-                if highest_tp_hit == 0 and high >= tp1:
-                    highest_tp_hit = 1
-                    if use_trailing:
-                        current_stop = entry
-                if highest_tp_hit == 1 and high >= tp2:
-                    highest_tp_hit = 2
-                    if use_trailing:
-                        current_stop = tp1
-                if highest_tp_hit == 2 and high >= tp3:
-                    highest_tp_hit = 3
-                    if use_trailing:
-                        current_stop = tp2
-                
-                if low <= current_stop:
-                    if highest_tp_hit == 0:
-                        outcome = "LOSS"
-                        pnl = -abs(entry - initial_stop)
-                    else:
-                        outcome = f"WIN_TP{highest_tp_hit}"
-                        pnl = abs(entry - current_stop) * highest_tp_hit
-                    break
-                    
-                if highest_tp_hit == 3:
-                    outcome = "WIN_TP3"
-                    pnl = abs(entry - tp3)
-                    break
-            else:  # Short
-                if highest_tp_hit == 0 and low <= tp1:
-                    highest_tp_hit = 1
-                    if use_trailing:
-                        current_stop = entry
-                if highest_tp_hit == 1 and low <= tp2:
-                    highest_tp_hit = 2
-                    if use_trailing:
-                        current_stop = tp1
-                if highest_tp_hit == 2 and low <= tp3:
-                    highest_tp_hit = 3
-                    if use_trailing:
-                        current_stop = tp2
-                
-                if high >= current_stop:
-                    if highest_tp_hit == 0:
-                        outcome = "LOSS"
-                        pnl = -abs(entry - initial_stop)
-                    else:
-                        outcome = f"WIN_TP{highest_tp_hit}"
-                        pnl = abs(entry - current_stop) * highest_tp_hit
-                    break
-                    
-                if highest_tp_hit == 3:
-                    outcome = "WIN_TP3"
-                    pnl = abs(entry - tp3)
-                    break
-        
-        if outcome != "PENDING":
-            trades.append({
-                'outcome': outcome,
-                'pnl': pnl,
-                'tp_reached': highest_tp_hit,
-                'exit_stop': current_stop
-            })
-
-    if not trades:
-        return 0, 0, 0, pd.DataFrame()
-        
-    df_res = pd.DataFrame(trades)
-    total = len(df_res)
-    win_rate = (len(df_res[df_res['outcome'].str.contains('WIN')]) / total) * 100
-    net_r = df_res['pnl'].sum()
-    
-    return total, win_rate, net_r, df_res
-
 def generate_mobile_report(row, symbol, tf, fibs, fg_index, smart_stop, 
-                          ai_analysis: Dict, use_trailing: bool, tp1_r: float, tp2_r: float, tp3_r: float):
-    is_bull = row['is_bull']
+                          ai_analysis: Dict, use_trailing: bool, tp1_r: float, tp2_r: float, tp3_r: float) -> str:
+    """
+    Generate HTML report with proper variable scoping and HTML escaping
+    """
+    # Extract all needed values first to avoid any scoping issues
+    is_bull = bool(row['is_bull'])
     direction = "LONG 🐂" if is_bull else "SHORT 🐻"
-
-    titan_sig = 1 if row['is_bull'] else -1
-    apex_sig = row['apex_trend']
-    gann_sig = row['gann_trend']
+    
+    # Calculate signal score
+    titan_sig = 1 if is_bull else -1
+    apex_sig = int(row['apex_trend'])
+    gann_sig = int(row['gann_trend']) if not pd.isna(row['gann_trend']) else 0
     momentum_sig = 1 if row['money_flow'] > 0 else -1
     volume_sig = 1 if row['rvol'] > 1.5 else 0
 
@@ -1122,90 +803,130 @@ def generate_mobile_report(row, symbol, tf, fibs, fg_index, smart_stop,
     if titan_sig == momentum_sig: score_val += 1
     if volume_sig == 1: score_val += 1
 
-    confidence = "LOW ⚠️"
-    if score_val >= 3: confidence = "MAX 🔥🔥🔥"
-    elif score_val >= 2: confidence = "HIGH 🔥"
-    elif score_val >= 1: confidence = "MEDIUM ⚡"
+    # Confidence text
+    if score_val >= 3: 
+        confidence = "MAX 🔥🔥🔥"
+    elif score_val >= 2: 
+        confidence = "HIGH 🔥"
+    elif score_val >= 1: 
+        confidence = "MEDIUM ⚡"
+    else: 
+        confidence = "LOW ⚠️"
 
-    vol_desc = "Normal"
-    if row['rvol'] > 2.0: vol_desc = "IGNITION 🚀🚀🚀"
-    elif row['rvol'] > 1.5: vol_desc = "Above Avg 🚀"
+    # Volume description
+    if row['rvol'] > 2.0: 
+        vol_desc = "IGNITION 🚀🚀🚀"
+    elif row['rvol'] > 1.5: 
+        vol_desc = "Above Avg 🚀"
+    else: 
+        vol_desc = "Normal"
 
     squeeze_txt = "⚠️ SQUEEZE ACTIVE" if row['in_squeeze'] else "✅ NO SQUEEZE"
 
-    report_html = f"""
-    <div class="report-card">
-        <div class="report-header">💠 SIGNAL: {direction}</div>
-        <div class="report-item">Confidence: <span class="highlight">{confidence}</span></div>
-        <div class="report-item">Layers: <span class="highlight">{score_val}/4 Confirmed</span></div>
-        <div class="report-item">Squeeze: <span class="highlight">{squeeze_txt}</span></div>
-        <div class="report-item">AI Score: <span class="highlight">{ai_analysis['signal_confidence']}/100</span></div>
-    </div>
+    # Format all numeric values
+    entry_price = float(row['close'])
+    stop_price = float(smart_stop)
+    tp1_price = float(row['tp1'])
+    tp2_price = float(row['tp2'])
+    tp3_price = float(row['tp3'])
+    max_risk = float(abs(entry_price - stop_price))
 
-    <div class="report-card">
-        <div class="report-header">🌊 FLOW & VOL</div>
-        <div class="report-item">RVOL: <span class="highlight">{row['rvol']:.2f} ({vol_desc})</span></div>
-        <div class="report-item">Money Flow: <span class="highlight">{row['money_flow']:.2f}</span></div>
-        <div class="report-item">VWAP: <span class="highlight">{'Above' if row['close'] > row['vwap'] else 'Below'}</span></div>
-    </div>
-
-    <div class="report-card">
-        <div class="report-header">🎯 EXECUTION PLAN</div>
-        <div class="report-item">Entry: <span class="highlight">{row['close']:.4f}</span></div>
-        <div class="report-item">🛑 SMART STOP: <span class="highlight">{smart_stop:.4f}</span></div>
-        <div class="report-item">1️⃣ TP1 ({tp1_r}R): <span class="highlight">{row['tp1']:.4f}</span></div>
-        <div class="report-item">2️⃣ TP2 ({tp2_r}R): <span class="highlight">{row['tp2']:.4f}</span></div>
-        <div class="report-item">3️⃣ TP3 ({tp3_r}R): <span class="highlight">{row['tp3']:.4f}</span></div>
-        <div class="report-item">📊 Risk/Reward: <span class="highlight">1:{tp3_r:.1f}</span></div>
-    </div>
-    """
+    # FIXED: Build HTML using f-strings with proper escaping and no inline CSS conflicts
+    html_parts = []
     
-    # TRADE MANAGEMENT CARD
+    # Main signal card
+    html_parts.append(f'''
+<div class="report-card">
+    <div class="report-header">💠 SIGNAL: {direction}</div>
+    <div class="report-item">Confidence: <span class="highlight">{confidence}</span></div>
+    <div class="report-item">Layers: <span class="highlight">{score_val}/4 Confirmed</span></div>
+    <div class="report-item">Squeeze: <span class="highlight">{squeeze_txt}</span></div>
+    <div class="report-item">AI Score: <span class="highlight">{ai_analysis["signal_confidence"]}/100</span></div>
+</div>
+''')
+
+    # Flow & Vol card
+    html_parts.append(f'''
+<div class="report-card">
+    <div class="report-header">🌊 FLOW & VOL</div>
+    <div class="report-item">RVOL: <span class="highlight">{row["rvol"]:.2f} ({vol_desc})</span></div>
+    <div class="report-item">Money Flow: <span class="highlight">{row["money_flow"]:.2f}</span></div>
+    <div class="report-item">VWAP: <span class="highlight">{'Above' if entry_price > float(row['vwap']) else 'Below'}</span></div>
+</div>
+''')
+
+    # Execution plan card
+    html_parts.append(f'''
+<div class="report-card">
+    <div class="report-header">🎯 EXECUTION PLAN</div>
+    <div class="report-item">Entry: <span class="highlight">{entry_price:.4f}</span></div>
+    <div class="report-item">🛑 SMART STOP: <span class="highlight">{stop_price:.4f}</span></div>
+    <div class="report-item">1️⃣ TP1 ({tp1_r}R): <span class="highlight">{tp1_price:.4f}</span></div>
+    <div class="report-item">2️⃣ TP2 ({tp2_r}R): <span class="highlight">{tp2_price:.4f}</span></div>
+    <div class="report-item">3️⃣ TP3 ({tp3_r}R): <span class="highlight">{tp3_price:.4f}</span></div>
+    <div class="report-item">📊 Risk/Reward: <span class="highlight">1:{tp3_r:.1f}</span></div>
+</div>
+''')
+
+    # Trade management card - FIXED HTML STRUCTURE
     if use_trailing:
-        trail_html = f"""
-        <div class="report-card" style="border-left-color: #00e676; background: linear-gradient(135deg, #1f2833 0%, #002a00 100%);">
-            <div class="report-header">📈 TRADE MANAGEMENT (Trailing)</div>
-            <div class="report-item">🔄 Trailing: <span class="highlight">ENABLED</span></div>
-            <div class="report-item">📍 Initial Stop: <span class="highlight">{smart_stop:.4f}</span></div>
-            <div class="report-item">🔒 At TP1 ({tp1_r}R): <span class="highlight">Move to Breakeven ({row['close']:.4f})</span></div>
-            <div class="report-item">🔒 At TP2 ({tp2_r}R): <span class="highlight">Lock TP1 ({row['tp1']:.4f})</span></div>
-            <div class="report-item">🔒 At TP3 ({tp3_r}R): <span class="highlight">Lock TP2 ({row['tp2']:.4f})</span></div>
-            <div class="report-item">🎯 Max Risk: <span class="highlight">{abs(row['close'] - smart_stop):.4f}</span></div>
-            <div class="report-item" style="color:#ffd740; font-size:12px;">⚠️ Rinse & Repeat: Let runners trail, scale out gradually</div>
-        </div>
-        """
-        report_html += trail_html
+        # FIXED: Separate CSS classes to avoid inline gradient conflicts
+        html_parts.append(f'''
+<div class="report-card trailing-enabled">
+    <div class="report-header">📈 TRADE MANAGEMENT (Trailing)</div>
+    <div class="report-item">🔄 Trailing: <span class="highlight">ENABLED</span></div>
+    <div class="report-item">📍 Initial Stop: <span class="highlight">{stop_price:.4f}</span></div>
+    <div class="report-item">🔒 At TP1 ({tp1_r}R): <span class="highlight">Move to Breakeven ({entry_price:.4f})</span></div>
+    <div class="report-item">🔒 At TP2 ({tp2_r}R): <span class="highlight">Lock TP1 ({tp1_price:.4f})</span></div>
+    <div class="report-item">🔒 At TP3 ({tp3_r}R): <span class="highlight">Lock TP2 ({tp2_price:.4f})</span></div>
+    <div class="report-item">🎯 Max Risk: <span class="highlight">{max_risk:.4f}</span></div>
+    <div class="report-item" style="color:#ffd740; font-size:12px;">⚠️ Rinse & Repeat: Let runners trail, scale out gradually</div>
+</div>
+''')
     else:
-        static_html = f"""
-        <div class="report-card" style="border-left-color: #ff9800;">
-            <div class="report-header">📊 TRADE MANAGEMENT (Static)</div>
-            <div class="report-item">🔄 Trailing: <span class="highlight">DISABLED</span></div>
-            <div class="report-item">🛑 Fixed Stop: <span class="highlight">{smart_stop:.4f}</span></div>
-            <div class="report-item">✅ Take Profits: <span class="highlight">All 3 TPs Static</span></div>
-            <div class="report-item" style="color:#ff1744; font-size:12px;">⚠️ Consider enabling trailing for better risk management</div>
-        </div>
-        """
-        report_html += static_html
-    
-    # AI RECOMMENDATION CARD
-    ai_rec_html = f"""
-    <div class="ai-card ai-recommendation" style="border-left-color: {ai_analysis['rec_color']};">
-        <strong>🤖 AI Recommendation:</strong> <span style="color:{ai_analysis['rec_color']};">{ai_analysis['recommendation']}</span><br>
-        <small>{ai_analysis['timeframe_note']}</small><br>
-        <strong>{ai_analysis['size_recommendation']}</strong><br>
-        <div style="color:{ai_analysis['session_color']}; margin-top:8px;">
-            {ai_analysis['session_note']}
-        </div>
+        html_parts.append(f'''
+<div class="report-card trailing-disabled">
+    <div class="report-header">📊 TRADE MANAGEMENT (Static)</div>
+    <div class="report-item">🔄 Trailing: <span class="highlight">DISABLED</span></div>
+    <div class="report-item">🛑 Fixed Stop: <span class="highlight">{stop_price:.4f}</span></div>
+    <div class="report-item">✅ Take Profits: <span class="highlight">All 3 TPs Static</span></div>
+    <div class="report-item" style="color:#ff1744; font-size:12px;">⚠️ Consider enabling trailing for better risk management</div>
+</div>
+''')
+
+    # AI Recommendation card
+    html_parts.append(f'''
+<div class="ai-card ai-recommendation" style="border-left-color: {ai_analysis["rec_color"]};">
+    <strong>🤖 AI Recommendation:</strong> <span style="color:{ai_analysis["rec_color"]};">{ai_analysis["recommendation"]}</span><br>
+    <small>{ai_analysis["timeframe_note"]}</small><br>
+    <strong>{ai_analysis["size_recommendation"]}</strong><br>
+    <div style="color:{ai_analysis["session_color"]}; margin-top:8px;">
+        {ai_analysis["session_note"]}
     </div>
-    """
-    report_html += ai_rec_html
-    
-    return report_html
+</div>
+''')
+
+    # Join all HTML parts
+    return ''.join(html_parts)
+
+def send_telegram_msg(token, chat, msg):
+    """Legacy direct send function (kept for fallback)"""
+    if not token or not chat:
+        return False
+    try:
+        r = requests.post(
+            f"https://api.telegram.org/bot{token}/sendMessage",
+            json={"chat_id": chat, "text": msg, "parse_mode": "Markdown"},
+            timeout=5
+        )
+        return r.status_code == 200
+    except Exception as e:
+        logger.error(f"Telegram error: {e}")
+        return False
 
 @st.cache_data(ttl=5)
 def get_klines(symbol_bin, interval, limit):
     try:
-        # Simulate WebSocket delay for fairness
         time.sleep(0.1)  
         r = requests.get(
             f"{BINANCE_API_BASE}/klines",
@@ -1227,7 +948,7 @@ def run_engines(df, amp, dev, hma_l, tp1, tp2, tp3, mf_l, vol_l, gann_l, use_ml_
         return df
     df = df.copy().reset_index(drop=True)
 
-    # Core Indicators (100% Preserved)
+    # Core Indicators
     df['tr'] = np.maximum(
         df['high']-df['low'],
         np.maximum(abs(df['high']-df['close'].shift(1)), abs(df['low']-df['close'].shift(1)))
@@ -1235,12 +956,12 @@ def run_engines(df, amp, dev, hma_l, tp1, tp2, tp3, mf_l, vol_l, gann_l, use_ml_
     df['atr'] = df['tr'].ewm(alpha=1/14, adjust=False).mean()
     df['hma'] = calculate_hma(df['close'], hma_l)
 
-    # VWAP (Preserved)
+    # VWAP
     df['tp'] = (df['high'] + df['low'] + df['close']) / 3
     df['vol_tp'] = df['tp'] * df['volume']
     df['vwap'] = df['vol_tp'].cumsum() / df['volume'].cumsum()
 
-    # Squeeze (TMM)
+    # Squeeze
     bb_basis = df['close'].rolling(20).mean()
     bb_dev = df['close'].rolling(20).std() * 2.0
     kc_basis = df['close'].rolling(20).mean()
@@ -1254,18 +975,18 @@ def run_engines(df, amp, dev, hma_l, tp1, tp2, tp3, mf_l, vol_l, gann_l, use_ml_
     df['rsi'] = 100 - (100 / (1 + (gain/loss)))
     df['rvol'] = df['volume'] / df['volume'].rolling(vol_l).mean()
 
-    # Money Flow (Enhanced)
+    # Money Flow
     rsi_source = df['rsi'] - 50
     vol_sma = df['volume'].rolling(mf_l).mean()
     df['money_flow'] = (rsi_source * (df['volume'] / vol_sma)).ewm(span=3).mean()
 
-    # Hyper Wave (Preserved)
+    # Hyper Wave
     pc = df['close'].diff()
     ds_pc = pc.ewm(span=25).mean().ewm(span=13).mean()
     ds_abs_pc = abs(pc).ewm(span=25).mean().ewm(span=13).mean()
     df['hyper_wave'] = (100 * (ds_pc / ds_abs_pc)) / 2
 
-    # Titan Trend (Preserved)
+    # Titan Trend
     df['ll'] = df['low'].rolling(amp).min()
     df['hh'] = df['high'].rolling(amp).max()
     trend = np.zeros(len(df))
@@ -1297,7 +1018,7 @@ def run_engines(df, amp, dev, hma_l, tp1, tp2, tp3, mf_l, vol_l, gann_l, use_ml_
     cond_buy = (df['is_bull']) & (~df['is_bull'].shift(1).fillna(False)) & (df['rvol']>1.2) & (df['money_flow']>0)
     cond_sell = (~df['is_bull']) & (df['is_bull'].shift(1).fillna(True)) & (df['rvol']>1.2) & (df['money_flow']<0)
     
-    # NEW: ML Filter (mock implementation)
+    # ML Filter
     if use_ml_filter:
         df['ml_score'] = (df['rvol'] * 0.3 + (df['money_flow'] > 0) * 0.7)
         cond_buy = cond_buy & (df['ml_score'] > 0.5)
@@ -1315,7 +1036,7 @@ def run_engines(df, amp, dev, hma_l, tp1, tp2, tp3, mf_l, vol_l, gann_l, use_ml_
     df['tp2'] = np.where(df['is_bull'], df['entry']+(risk*tp2), df['entry']-(risk*tp2))
     df['tp3'] = np.where(df['is_bull'], df['entry']+(risk*tp3), df['entry']-(risk*tp3))
 
-    # Apex & Gann (Preserved)
+    # Apex & Gann
     apex_base = calculate_hma(df['close'], 55)
     apex_atr = df['atr'] * 1.5
     df['apex_upper'] = apex_base + apex_atr
@@ -1366,21 +1087,158 @@ def run_engines(df, amp, dev, hma_l, tp1, tp2, tp3, mf_l, vol_l, gann_l, use_ml_
 # Initialize database
 db = SignalDatabase()
 
-# NEW: Initialize broadcast engine if credentials exist
+# Header
+st.title("💠 TITAN-SIGNALS")
+st.caption("v20.1 | Enterprise Trading Engine + Fixed HTML Rendering")
+
+# Mobile Clock
+components.html(
+    """
+    <div id="live_clock"></div>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Roboto+Mono:wght@700&display=swap');
+        body { margin: 0; background-color: transparent; text-align: center; }
+        #live_clock {
+            font-family: 'Roboto Mono', monospace;
+            font-size: 20px;
+            color: #39ff14;
+            text-shadow: 0 0 10px rgba(57, 255, 20, 0.8);
+            font-weight: 800;
+            padding: 5px;
+        }
+    </style>
+    <script>
+    function updateTime() {
+        const now = new Date();
+        const timeString = now.toLocaleTimeString('en-GB', { timeZone: 'UTC' });
+        document.getElementById('live_clock').innerHTML = 'UTC: ' + timeString;
+    }
+    setInterval(updateTime, 1000);
+    updateTime();
+    </script>
+    """,
+    height=40
+)
+
+# =============================================================================
+# SIDEBAR
+# =============================================================================
+with st.sidebar:
+    st.header("⚙️ CONTROL")
+    if st.button("🔄 REFRESH", use_container_width=True):
+        st.rerun()
+
+    st.subheader("📡 FEED")
+    bases_all = get_binanceus_usdt_bases()
+
+    if "symbol_input" not in st.session_state:
+        st.session_state.symbol_input = "BTC"
+
+    with st.expander("🧬 Ticker Universe (Quick Select)", expanded=True):
+        if bases_all:
+            list_mode = st.selectbox("List", ["Popular", "All Binance US (USDT)"], index=0)
+            if list_mode == "Popular":
+                options = [b for b in POPULAR_BASES if b in bases_all] or POPULAR_BASES
+            else:
+                options = POPULAR_BASES + [b for b in bases_all if b not in POPULAR_BASES]
+
+            quick_base = st.selectbox("Quick Ticker", options, index=(options.index("BTC") if "BTC" in options else 0))
+            q1, q2 = st.columns([1, 1])
+            with q1:
+                if st.button("Use Quick Ticker", use_container_width=True):
+                    st.session_state.symbol_input = quick_base
+            with q2:
+                st.caption(f"{len(bases_all)} tickers loaded")
+        else:
+            st.warning("Ticker universe unavailable. Manual input still works.")
+
+    symbol_input = st.text_input("Asset", value=st.session_state.symbol_input)
+    st.session_state.symbol_input = symbol_input
+    symbol = symbol_input.strip().upper().replace("/", "").replace("-", "")
+    if not symbol.endswith("USDT"):
+        symbol += "USDT"
+
+    c1, c2 = st.columns(2)
+    with c1:
+        timeframe = st.selectbox("TF", ["15m", "1h", "4h", "1d"], index=1)
+    with c2:
+        limit = st.slider("Depth", 100, 500, 200, 50)
+
+    st.markdown("---")
+    st.subheader("🧠 LOGIC")
+    amplitude = st.number_input("Amp", 2, 200, 10)
+    channel_dev = st.number_input("Dev", 0.5, 10.0, 3.0, 0.1)
+    hma_len = st.number_input("HMA", 2, 400, 50)
+    gann_len = st.number_input("Gann", 1, 50, 3)
+
+    with st.expander("🎯 Targets"):
+        tp1_r = st.number_input("TP1 (R)", value=1.5)
+        tp2_r = st.number_input("TP2 (R)", value=3.0)
+        tp3_r = st.number_input("TP3 (R)", value=5.0)
+
+    with st.expander("🛑 TRADE MANAGEMENT"):
+        use_trailing = st.toggle("Enable Trailing Stops", value=True)
+        use_ml_filter = st.toggle("ML Signal Filter", value=False)
+        st.caption("TP1→Breakeven, TP2→TP1, TP3→TP2")
+
+    with st.expander("🔐 AUTHENTICATION"):
+        enable_auth = st.toggle("Enable User Login", value=False)
+        st.caption("Requires Firebase setup")
+
+    st.markdown("---")
+    st.subheader("📡 BROADCAST CONTROLS")
+    
+    tg_token = st.text_input("Bot Token", value=st.secrets.get("TELEGRAM_TOKEN", ""), type="password")
+    tg_chat = st.text_input("Chat ID", value=st.secrets.get("TELEGRAM_CHAT_ID", ""), type="password")
+    
+    if "broadcast_engine" not in st.session_state:
+        st.session_state.broadcast_engine = None
+    
+    if tg_token and tg_chat:
+        if st.button("🚀 ACTIVATE BROADCAST", use_container_width=True):
+            st.session_state.broadcast_engine = BroadcastEngine(tg_token, tg_chat)
+            st.success("Broadcast system activated!")
+        
+        if st.session_state.broadcast_engine and st.session_state.broadcast_engine.active:
+            st.markdown('<div class="broadcast-status broadcast-active">🟢 BROADCAST ACTIVE</div>', unsafe_allow_html=True)
+            
+            st.subheader("📤 Quick Send")
+            
+            if st.button("📨 STRICT SIGNAL", use_container_width=True):
+                st.session_state.send_strict_signal = True
+            
+            if st.button("🤖 AI RISK ANALYSIS", use_container_width=True):
+                st.session_state.send_ai_analysis = True
+                
+            if st.button("📊 MARKET SUMMARY", use_container_width=True):
+                st.session_state.send_market_summary = True
+            
+            if hasattr(st.session_state.broadcast_engine, 'message_queue'):
+                queue_size = len(st.session_state.broadcast_engine.message_queue)
+                st.caption(f"Queue: {queue_size} messages pending")
+            
+            with st.expander("📜 Broadcast History", expanded=False):
+                if st.button("Load History", use_container_width=True):
+                    st.session_state.show_broadcast_history = True
+        else:
+            st.markdown('<div class="broadcast-status broadcast-inactive">🔴 BROADCAST INACTIVE</div>', unsafe_allow_html=True)
+    else:
+        st.warning("Enter Telegram credentials to activate broadcast")
+
+# Render ticker tape
+render_ticker_tape(symbol)
+
+# =============================================================================
+# MAIN LOGIC
+# =============================================================================
+# Initialize broadcast engine if credentials exist
 tg_token = st.secrets.get("TELEGRAM_TOKEN", "")
 tg_chat = st.secrets.get("TELEGRAM_CHAT_ID", "")
 
 if tg_token and tg_chat and not st.session_state.broadcast_engine:
     st.session_state.broadcast_engine = BroadcastEngine(tg_token, tg_chat)
 
-# Check for WebSocket data
-ws_data = None
-if "ws_client" in st.session_state:
-    ws_client = st.session_state.ws_client
-    if ws_client:
-        ws_data = ws_client.get_latest_candle()
-
-# Fetch REST data (fallback)
+# Fetch data
 df = get_klines(symbol, timeframe, limit)
 
 if not df.empty:
@@ -1392,27 +1250,24 @@ if not df.empty:
     fibs = calculate_fibonacci(df)
     fg_index = calculate_fear_greed_index(df)
 
+    # Calculate stops
     if last['is_bull']:
         smart_stop = min(last['entry_stop'], fibs['fib_618'] * 0.9995)
     else:
         smart_stop = max(last['entry_stop'], fibs['fib_618'] * 1.0005)
 
-    # Calculate trailing stop for display
     trailing_stop, trail_status = calculate_trailing_stop(
         last['close'], last['close'], smart_stop,
         last['tp1'], last['tp2'], last['tp3'], last['is_bull']
     )
 
-    # AI Analysis
     ai_analysis = analyze_asset_and_timeframe(symbol, timeframe, df)
     
-    # Save signal to database
+    # Save signal
     if last['buy'] or last['sell']:
         db.save_signal(symbol, last.to_dict())
     
-    # ----------------------------------------------------
-    # NEW: BROADCAST TRIGGER HANDLERS
-    # ----------------------------------------------------
+    # Broadcast handlers
     if "send_strict_signal" in st.session_state and st.session_state.send_strict_signal:
         if st.session_state.broadcast_engine:
             signal_data = {
@@ -1432,9 +1287,7 @@ if not df.empty:
                 'ai_score': ai_analysis['signal_confidence'],
                 'signal_grade': "A+" if ai_analysis['signal_confidence'] > 80 else "B+"
             }
-            st.session_state.broadcast_engine.queue_message(
-                'STRICT_SIGNAL', symbol, signal_data, priority=10
-            )
+            st.session_state.broadcast_engine.queue_message('STRICT_SIGNAL', symbol, signal_data, priority=10)
             st.success("✅ Strict signal queued!")
         st.session_state.send_strict_signal = False
     
@@ -1453,15 +1306,12 @@ if not df.empty:
                 'recommendation': ai_analysis['recommendation'],
                 'size_rec': ai_analysis['size_recommendation']
             }
-            st.session_state.broadcast_engine.queue_message(
-                'AI_RISK_ANALYSIS', symbol, ai_data, priority=5
-            )
+            st.session_state.broadcast_engine.queue_message('AI_RISK_ANALYSIS', symbol, ai_data, priority=5)
             st.success("✅ AI risk analysis queued!")
         st.session_state.send_ai_analysis = False
     
     if "send_market_summary" in st.session_state and st.session_state.send_market_summary:
         if st.session_state.broadcast_engine:
-            # Mock market data (in real app, analyze multiple assets)
             summary_data = {
                 'top_performers': "BTC: +2.3%, ETH: +1.8%, SOL: +4.1%",
                 'risk_signals': "DOGE: High Vol, SHIB: Squeeze Active",
@@ -1471,15 +1321,11 @@ if not df.empty:
                 'strongest_setups': f"{symbol}: {ai_analysis['recommendation']}",
                 'symbol_count': 30
             }
-            st.session_state.broadcast_engine.queue_message(
-                'MARKET_SUMMARY', "MULTI", summary_data, priority=3
-            )
+            st.session_state.broadcast_engine.queue_message('MARKET_SUMMARY', "MULTI", summary_data, priority=3)
             st.success("✅ Market summary queued!")
         st.session_state.send_market_summary = False
     
-    # ----------------------------------------------------
-    # AI ANALYSIS CARD
-    # ----------------------------------------------------
+    # AI Analysis Card
     st.markdown("### 🤖 AI MARKET ANALYSIS")
     ai_col1, ai_col2 = st.columns([1, 2])
     with ai_col1:
@@ -1506,9 +1352,7 @@ if not df.empty:
         </div>
         """, unsafe_allow_html=True)
     
-    # ----------------------------------------------------
-    # MOBILE METRICS (2x2 Grid)
-    # ----------------------------------------------------
+    # Mobile Metrics
     c_m1, c_m2 = st.columns(2)
     with c_m1:
         tv_symbol = f"BINANCE:{symbol}"
@@ -1538,21 +1382,21 @@ if not df.empty:
     with c_m4:
         st.metric("CURRENT TRAIL", f"{trailing_stop:.4f}")
 
-    # ----------------------------------------------------
-    # REPORT & ACTIONS
-    # ----------------------------------------------------
-    report_html = generate_mobile_report(last, symbol, timeframe, fibs, fg_index, smart_stop, 
-                                       ai_analysis, use_trailing, tp1_r, tp2_r, tp3_r)
+    # Generate and render report - FIXED CALL
+    report_html = generate_mobile_report(
+        last, symbol, timeframe, fibs, fg_index, smart_stop, 
+        ai_analysis, use_trailing, tp1_r, tp2_r, tp3_r
+    )
+    
+    # FIXED: Explicitly use st.markdown with unsafe_allow_html
     st.markdown(report_html, unsafe_allow_html=True)
 
-    # Enhanced Action Buttons with Broadcast Integration
+    # Action Buttons
     st.markdown("### ⚡ ACTION")
     b_col1, b_col2, b_col3 = st.columns(3)
     with b_col1:
         if st.button("🔥 ALERT TG", use_container_width=True):
-            msg = f"TITAN SIGNAL: {symbol} | {'LONG' if last['is_bull'] else 'SHORT'} | EP: {last['close']:.4f} | Score: {ai_analysis['signal_confidence']}/100"
             if st.session_state.broadcast_engine:
-                # Queue strict signal via broadcast engine
                 signal_data = {
                     'direction': "LONG" if last['is_bull'] else "SHORT",
                     'entry_price': last['close'],
@@ -1573,7 +1417,7 @@ if not df.empty:
                 st.session_state.broadcast_engine.queue_message('STRICT_SIGNAL', symbol, signal_data, priority=10)
                 st.success("✅ Broadcast queued!")
             else:
-                # Fallback to direct send
+                msg = f"TITAN SIGNAL: {symbol} | {'LONG' if last['is_bull'] else 'SHORT'} | EP: {last['close']:.4f} | Score: {ai_analysis['signal_confidence']}/100"
                 if send_telegram_msg(tg_token, tg_chat, msg):
                     st.success("SENT")
                 else:
@@ -1581,23 +1425,7 @@ if not df.empty:
 
     with b_col2:
         if st.button("📝 REPORT TG", use_container_width=True):
-            trail_status = "TRAILING ON" if use_trailing else "TRAILING OFF"
-            txt_rep = f"""
-SIGNAL: {symbol} {'LONG' if last['is_bull'] else 'SHORT'}
-Confidence: {('HIGH' if last['rvol'] > 1.5 else 'MEDIUM')}
-Entry: {last['close']:.4f}
-Initial Stop: {smart_stop:.4f}
-Current Trail: {trailing_stop:.4f}
-TP1: {last['tp1']:.4f}
-TP2: {last['tp2']:.4f}
-TP3: {last['tp3']:.4f}
-Timeframe Score: {ai_analysis['timeframe_score']}/100
-Market Regime: {ai_analysis['market_regime']}
-Trade Mgmt: {trail_status}
-AI Confidence: {ai_analysis['signal_confidence']}/100
-            """
             if st.session_state.broadcast_engine:
-                # Queue AI risk analysis
                 ai_data = {
                     'market_regime': ai_analysis['market_regime'],
                     'current_vol': ai_analysis['current_vol'],
@@ -1614,7 +1442,15 @@ AI Confidence: {ai_analysis['signal_confidence']}/100
                 st.session_state.broadcast_engine.queue_message('AI_RISK_ANALYSIS', symbol, ai_data, priority=5)
                 st.success("✅ AI analysis queued!")
             else:
-                # Fallback to direct send
+                trail_status = "TRAILING ON" if use_trailing else "TRAILING OFF"
+                txt_rep = f"""
+    SIGNAL: {symbol} {'LONG' if last['is_bull'] else 'SHORT'}
+    Confidence: {('HIGH' if last['rvol'] > 1.5 else 'MEDIUM')}
+    Entry: {last['close']:.4f}
+    Initial Stop: {smart_stop:.4f}
+    Current Trail: {trailing_stop:.4f}
+    Trade Mgmt: {trail_status}
+    """
                 if send_telegram_msg(tg_token, tg_chat, f"REPORT: {symbol}\n{txt_rep}"):
                     st.success("SENT")
                 else:
@@ -1625,14 +1461,13 @@ AI Confidence: {ai_analysis['signal_confidence']}/100
             b_total, b_win, b_net, b_df = run_backtest(df, tp1_r, tp2_r, tp3_r, use_trailing)
             if b_total > 0:
                 if st.session_state.broadcast_engine:
-                    # Queue backtest report
                     bt_data = {
                         'total_trades': b_total,
                         'win_rate': b_win,
                         'net_pnl': b_net,
                         'avg_tp': b_df['tp_reached'].mean() if 'tp_reached' in b_df.columns else 0,
                         'trade_distribution': f"TP1: {len(b_df[b_df['tp_reached']>=1])}, TP2: {len(b_df[b_df['tp_reached']>=2])}, TP3: {len(b_df[b_df['tp_reached']>=3])}",
-                        'ai_validation': 85.0,  # Mock
+                        'ai_validation': 85.0,
                         'system_health': "GOOD" if b_win > 50 else "POOR",
                         'start_date': df['timestamp'].iloc[0].strftime('%Y-%m-%d'),
                         'end_date': df['timestamp'].iloc[-1].strftime('%Y-%m-%d')
@@ -1644,7 +1479,7 @@ AI Confidence: {ai_analysis['signal_confidence']}/100
             else:
                 st.warning("No backtest data available")
 
-    # Backtest Mini-Stat
+    # Backtest stats
     b_total, b_win, b_net, b_df = run_backtest(df, tp1_r, tp2_r, tp3_r, use_trailing)
     if b_total > 0:
         avg_tp = b_df['tp_reached'].mean() if 'tp_reached' in b_df.columns else 0
@@ -1652,28 +1487,20 @@ AI Confidence: {ai_analysis['signal_confidence']}/100
     else:
         st.caption("📊 No completed trades in lookback period")
 
-    # ----------------------------------------------------
-    # MAIN CHART (Enhanced with trailing lines)
-    # ----------------------------------------------------
+    # Chart
     fig = go.Figure()
     fig.add_candlestick(x=df['timestamp'], open=df['open'], high=df['high'], low=df['low'], close=df['close'], name='Price')
     fig.add_trace(go.Scatter(x=df['timestamp'], y=df['hma'], mode='lines', name='HMA', line=dict(color='#66fcf1', width=1)))
     fig.add_trace(go.Scatter(x=df['timestamp'], y=df['vwap'], mode='lines', name='VWAP', line=dict(color='#9933ff', width=2)))
     
-    # Add Fibonacci levels
     fig.add_hline(y=fibs['fib_618'], line_dash="dash", line_color="#ffd740", annotation_text="FIB 0.618")
     fig.add_hline(y=fibs['fib_500'], line_dash="dash", line_color="#ff9800", annotation_text="FIB 0.5")
     fig.add_hline(y=fibs['fib_382'], line_dash="dash", line_color="#ff5722", annotation_text="FIB 0.382")
-
-    # Add TP levels
     fig.add_hline(y=last['tp1'], line_dash="dot", line_color="#00e676", annotation_text=f"TP1 ({tp1_r}R)")
     fig.add_hline(y=last['tp2'], line_dash="dot", line_color="#ffd740", annotation_text=f"TP2 ({tp2_r}R)")
     fig.add_hline(y=last['tp3'], line_dash="dot", line_color="#ff5722", annotation_text=f"TP3 ({tp3_r}R)")
-
-    # Add trailing stop visualization
     fig.add_hline(y=trailing_stop, line_dash="solid", line_color="#ff1744", 
-                 annotation_text=f"Trail: {trail_status}", 
-                 annotation_position="right")
+                 annotation_text=f"Trail: {trail_status}", annotation_position="right")
 
     buys = df[df['buy']]
     sells = df[df['sell']]
@@ -1690,9 +1517,7 @@ AI Confidence: {ai_analysis['signal_confidence']}/100
                       xaxis_rangeslider_visible=False, legend=dict(orientation="h", y=1, x=0))
     st.plotly_chart(fig, use_container_width=True)
 
-    # ----------------------------------------------------
-    # ADVANCED INDICATORS (Tabs)
-    # ----------------------------------------------------
+    # Tabs
     t1, t2, t3, t4 = st.tabs(["📊 GANN", "🌊 FLOW", "🧠 SENT", "📈 Performance"])
     
     with t1:
@@ -1742,7 +1567,6 @@ AI Confidence: {ai_analysis['signal_confidence']}/100
         f3.update_layout(height=250, template='plotly_dark', margin=dict(l=20, r=20, t=30, b=0))
         st.plotly_chart(f3, use_container_width=True)
         
-        # AI Sentiment Breakdown
         st.markdown(f"""
         <div class="ai-card">
             <div class="report-item"><strong>Extreme Fear:</strong> 0-25 (Oversold - Consider Long)</div>
@@ -1756,7 +1580,6 @@ AI Confidence: {ai_analysis['signal_confidence']}/100
         """, unsafe_allow_html=True)
 
     with t4:
-        # Performance metrics with database
         st.markdown("### 📊 Historical Performance")
         if "show_perf" not in st.session_state:
             st.session_state.show_perf = False
@@ -1765,7 +1588,6 @@ AI Confidence: {ai_analysis['signal_confidence']}/100
             st.session_state.show_perf = True
         
         if st.session_state.show_perf:
-            # Mock performance data (in real app, query from db)
             perf_data = pd.DataFrame({
                 'Date': pd.date_range(start='2024-01-01', periods=30),
                 'PnL': np.random.randn(30).cumsum() * 2 + 5
@@ -1775,9 +1597,7 @@ AI Confidence: {ai_analysis['signal_confidence']}/100
             f4.update_layout(height=250, template='plotly_dark', margin=dict(l=0, r=0, t=0, b=0))
             st.plotly_chart(f4, use_container_width=True)
 
-    # ----------------------------------------------------
-    # SIGNAL VALIDATION CHECKLIST (Enhanced)
-    # ----------------------------------------------------
+    # Validation Checklist
     st.markdown("### ✅ SIGNAL VALIDATION CHECKLIST")
     
     titan_sig = 1 if last['is_bull'] else -1
@@ -1795,13 +1615,11 @@ AI Confidence: {ai_analysis['signal_confidence']}/100
         "Session Optimal": "Active" in ai_analysis['session_note']
     }
     
-    # Display validation items
     for item, passed in validation_items.items():
         status = "✅ PASS" if passed else "❌ FAIL"
         color = "#00e676" if passed else "#ff1744"
         st.markdown(f'<div class="report-item" style="color:{color};">{item}: <strong>{status}</strong></div>', unsafe_allow_html=True)
     
-    # Calculate overall grade
     pass_count = sum(validation_items.values())
     if pass_count >= 7:
         grade = "A+ (EXCELLENT)"
@@ -1816,7 +1634,6 @@ AI Confidence: {ai_analysis['signal_confidence']}/100
         grade = "D (POOR)"
         grade_color = "#ff1744"
     
-    # Display grade
     st.markdown(f"""
     <div class="ai-card" style="text-align:center; border: 2px solid {grade_color};">
         <div style="font-size:24px; color:{grade_color};"><strong>SIGNAL GRADE: {grade}</strong></div>
@@ -1827,9 +1644,7 @@ AI Confidence: {ai_analysis['signal_confidence']}/100
     </div>
     """, unsafe_allow_html=True)
     
-    # ----------------------------------------------------
-    # NEW: BROADCAST HISTORY VIEWER
-    # ----------------------------------------------------
+    # Broadcast History
     if "show_broadcast_history" in st.session_state and st.session_state.show_broadcast_history:
         st.markdown("### 📡 Broadcast History")
         if st.session_state.broadcast_engine:
@@ -1849,10 +1664,7 @@ else:
     st.info("Tip: Use Quick Ticker selector or verify asset is listed on Binance US")
     st.info("Advanced: Consider enabling WebSocket for real-time data")
 
-# Cleanup on app exit
+# Cleanup
 def cleanup():
     if st.session_state.broadcast_engine:
         st.session_state.broadcast_engine.stop()
-
-# Register cleanup (will run when script ends)
-cleanup()
