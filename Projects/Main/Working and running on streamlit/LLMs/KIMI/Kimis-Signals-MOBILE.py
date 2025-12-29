@@ -500,6 +500,30 @@ def calculate_hma(series: pd.Series, length: int) -> pd.Series:
     return hma
 
 # =============================================================================
+# FIX: Add missing calculate_fibonacci function
+# =============================================================================
+def calculate_fibonacci(df: pd.DataFrame, lookback: int = 50) -> Dict[str, float]:
+    """
+    Calculate Fibonacci retracement levels
+    Returns dict with fib_382, fib_500, fib_618, high, low
+    """
+    if df.empty or len(df) < lookback:
+        return {'fib_382': 0.0, 'fib_500': 0.0, 'fib_618': 0.0, 'high': 0.0, 'low': 0.0}
+    
+    recent = df.iloc[-lookback:]
+    high = recent['high'].max()
+    low = recent['low'].min()
+    diff = high - low
+    
+    return {
+        'fib_382': high - (diff * 0.382),
+        'fib_500': high - (diff * 0.500),
+        'fib_618': high - (diff * 0.618),
+        'high': high,
+        'low': low
+    }
+
+# =============================================================================
 # DATABASE LAYER
 # =============================================================================
 class SignalDatabase:
@@ -1104,6 +1128,121 @@ def run_engines(df, amp, dev, hma_l, tp1, tp2, tp3, mf_l, vol_l, gann_l, use_ml_
     df['gann_act'] = g_act
 
     return df
+
+def calculate_fear_greed_index(df):
+    try:
+        df['log_ret'] = np.log(df['close'] / df['close'].shift(1))
+        vol_score = 50 - ((df['log_ret'].rolling(30).std().iloc[-1] - df['log_ret'].rolling(90).std().iloc[-1]) / df['log_ret'].rolling(90).std().iloc[-1]) * 100
+        vol_score = max(0, min(100, vol_score))
+        rsi = df['rsi'].iloc[-1]
+        sma_50 = df['close'].rolling(50).mean().iloc[-1]
+        dist = (df['close'].iloc[-1] - sma_50) / sma_50
+        trend_score = 50 + (dist * 1000)
+        fg = (vol_score * 0.3) + (rsi * 0.4) + (max(0, min(100, trend_score)) * 0.3)
+        return int(fg)
+    except:
+        return 50
+
+def run_backtest(df, tp1_r, tp2_r, tp3_r, use_trailing):
+    """
+    Enhanced backtest with trailing stop simulation
+    """
+    trades = []
+    signals = df[(df['buy']) | (df['sell'])]
+    
+    for idx, row in signals.iterrows():
+        future = df.loc[idx+1: idx+30]
+        if future.empty:
+            continue
+            
+        entry = row['close']
+        initial_stop = row['entry_stop']
+        tp1 = row['tp1']
+        tp2 = row['tp2']
+        tp3 = row['tp3']
+        is_long = row['is_bull']
+        
+        current_stop = initial_stop
+        highest_tp_hit = 0
+        outcome = "PENDING"
+        pnl = 0
+        
+        for _, candle in future.iterrows():
+            high = candle['high']
+            low = candle['low']
+            
+            if is_long:
+                if highest_tp_hit == 0 and high >= tp1:
+                    highest_tp_hit = 1
+                    if use_trailing:
+                        current_stop = entry
+                if highest_tp_hit == 1 and high >= tp2:
+                    highest_tp_hit = 2
+                    if use_trailing:
+                        current_stop = tp1
+                if highest_tp_hit == 2 and high >= tp3:
+                    highest_tp_hit = 3
+                    if use_trailing:
+                        current_stop = tp2
+                
+                if low <= current_stop:
+                    if highest_tp_hit == 0:
+                        outcome = "LOSS"
+                        pnl = -abs(entry - initial_stop)
+                    else:
+                        outcome = f"WIN_TP{highest_tp_hit}"
+                        pnl = abs(entry - current_stop) * highest_tp_hit
+                    break
+                    
+                if highest_tp_hit == 3:
+                    outcome = "WIN_TP3"
+                    pnl = abs(entry - tp3)
+                    break
+            else:  # Short
+                if highest_tp_hit == 0 and low <= tp1:
+                    highest_tp_hit = 1
+                    if use_trailing:
+                        current_stop = entry
+                if highest_tp_hit == 1 and low <= tp2:
+                    highest_tp_hit = 2
+                    if use_trailing:
+                        current_stop = tp1
+                if highest_tp_hit == 2 and low <= tp3:
+                    highest_tp_hit = 3
+                    if use_trailing:
+                        current_stop = tp2
+                
+                if high >= current_stop:
+                    if highest_tp_hit == 0:
+                        outcome = "LOSS"
+                        pnl = -abs(entry - initial_stop)
+                    else:
+                        outcome = f"WIN_TP{highest_tp_hit}"
+                        pnl = abs(entry - current_stop) * highest_tp_hit
+                    break
+                    
+                if highest_tp_hit == 3:
+                    outcome = "WIN_TP3"
+                    pnl = abs(entry - tp3)
+                    break
+        
+        if outcome != "PENDING":
+            trades.append({
+                'outcome': outcome,
+                'pnl': pnl,
+                'tp_reached': highest_tp_hit,
+                'exit_stop': current_stop
+            })
+
+    if not trades:
+        return 0, 0, 0, pd.DataFrame()
+        
+    df_res = pd.DataFrame(trades)
+    total = len(df_res)
+    win_rate = (len(df_res[df_res['outcome'].str.contains('WIN')]) / total) * 100
+    net_r = df_res['pnl'].sum()
+    
+    return total, win_rate, net_r, df_res
 
 # =============================================================================
 # APP MAIN
