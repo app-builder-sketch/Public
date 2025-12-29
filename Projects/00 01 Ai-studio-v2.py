@@ -1,4 +1,5 @@
 
+
 import React, { useState, useEffect, useRef } from 'react';
 import { 
   Send, 
@@ -101,28 +102,28 @@ const App: React.FC = () => {
     const errs: string[] = [];
     const { symbol, entry, tp1, tp2, tp3, sl, direction } = signal;
 
-    if (!symbol.trim()) errs.push("Symbol is required.");
-    if (entry <= 0) errs.push("Entry price must be greater than 0.");
-    if (tp1 <= 0) errs.push("TP1 must be greater than 0.");
-    if (tp2 <= 0) errs.push("TP2 must be greater than 0.");
-    if (tp3 <= 0) errs.push("TP3 must be greater than 0.");
-    if (sl <= 0) errs.push("Stop Loss must be greater than 0.");
+    if (!symbol.trim()) errs.push("Symbol identification is missing.");
+    if (entry <= 0) errs.push(`Invalid Entry: ${entry} (Value must be positive)`);
+    if (tp1 <= 0) errs.push(`Invalid TP1: ${tp1} (Value must be positive)`);
+    if (tp2 <= 0) errs.push(`Invalid TP2: ${tp2} (Value must be positive)`);
+    if (tp3 <= 0) errs.push(`Invalid TP3: ${tp3} (Value must be positive)`);
+    if (sl <= 0) errs.push(`Invalid Stop Loss: ${sl} (Value must be positive)`);
 
     if (direction === SignalDirection.BUY) {
-      if (sl >= entry) errs.push("BUY Logic: Stop Loss must be strictly lower than Entry price.");
-      if (entry >= tp1) errs.push("BUY Logic: Take Profit 1 must be strictly higher than Entry price.");
-      if (tp1 >= tp2) errs.push("BUY Logic: Take Profit 2 must be strictly higher than Take Profit 1.");
-      if (tp2 >= tp3) errs.push("BUY Logic: Take Profit 3 must be strictly higher than Take Profit 2.");
+      if (sl >= entry) errs.push(`BUY VIOLATION: Stop Loss (${sl}) must be lower than Entry (${entry}).`);
+      if (entry >= tp1) errs.push(`BUY VIOLATION: Take Profit 1 (${tp1}) must be higher than Entry (${entry}).`);
+      if (tp1 >= tp2) errs.push(`BUY VIOLATION: Take Profit 2 (${tp2}) must be higher than TP1 (${tp1}).`);
+      if (tp2 >= tp3) errs.push(`BUY VIOLATION: Take Profit 3 (${tp3}) must be higher than TP2 (${tp2}).`);
     } else {
-      if (sl <= entry) errs.push("SELL Logic: Stop Loss must be strictly higher than Entry price.");
-      if (entry <= tp1) errs.push("SELL Logic: Take Profit 1 must be strictly lower than Entry price.");
-      if (tp1 <= tp2) errs.push("SELL Logic: Take Profit 2 must be strictly lower than Take Profit 1.");
-      if (tp2 <= tp3) errs.push("SELL Logic: Take Profit 3 must be strictly lower than Take Profit 2.");
+      if (sl <= entry) errs.push(`SELL VIOLATION: Stop Loss (${sl}) must be higher than Entry (${entry}).`);
+      if (entry <= tp1) errs.push(`SELL VIOLATION: Take Profit 1 (${tp1}) must be lower than Entry (${entry}).`);
+      if (tp1 <= tp2) errs.push(`SELL VIOLATION: Take Profit 2 (${tp2}) must be lower than TP1 (${tp1}).`);
+      if (tp2 <= tp3) errs.push(`SELL VIOLATION: Take Profit 3 (${tp3}) must be lower than TP2 (${tp2}).`);
     }
 
     setErrors(errs);
     if (errs.length > 0) {
-      addLog(`[ERROR] Signal Validation Failed: ${errs.length} issues found.`);
+      addLog(`[ERROR] Protocol Validation Breach: ${errs.length} issues identified.`);
     }
     return errs.length === 0;
   };
@@ -163,7 +164,7 @@ const App: React.FC = () => {
       }
       await sendSignalToTelegram(telegramConfig, finalSignal);
       addLog("[SUCCESS] Broadcast delivered via Secure Telegram Gateway.");
-      setErrors([]); // Clear errors on success
+      setErrors([]); 
     } catch (err: any) {
       addLog(`[ERROR] Protocol Error: ${err.message}`);
     } finally {
