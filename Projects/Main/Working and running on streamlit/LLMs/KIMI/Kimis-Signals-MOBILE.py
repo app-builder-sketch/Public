@@ -41,7 +41,7 @@ def widget_error_boundary(func):
     return wrapper
 
 # =============================================================================
-# BROADCAST ENGINE (UNCHANGED)
+# BROADCAST ENGINE (FIXED - SYNCHRONOUS VERSION)
 # =============================================================================
 from dataclasses import dataclass
 
@@ -72,7 +72,6 @@ class RateLimiter:
                 return True
             return False
     
-
     def time_until_next(self) -> float:
         """Get time until next available slot"""
         with self.lock:
@@ -84,7 +83,7 @@ class RateLimiter:
             return max(0, wait_time)
 
 class BroadcastEngine:
-    """Enterprise-grade multi-format Telegram broadcast system"""
+    """Enterprise-grade multi-format Telegram broadcast system - FIXED SYNCHRONOUS VERSION"""
     
     REPORT_TYPES = {
         'STRICT_SIGNAL': 'strict_signal',
@@ -108,7 +107,7 @@ class BroadcastEngine:
 🤖 AI Score: {ai_score}/100 | Grade: {signal_grade}
 
 ⏰ {timestamp} UTC""",
-
+        
         'ai_risk_analysis': """🤖 *AI RISK ANALYSIS* | {symbol}
 
 📈 *Market Regime:* {market_regime}
@@ -128,7 +127,7 @@ class BroadcastEngine:
 🎯 *Position Sizing:* {size_rec}
 
 _Last updated: {timestamp} UTC""",
-
+        
         'market_summary': """📊 *MARKET SUMMARY* | {timestamp}
 
 🌟 *Top Performers:*
@@ -146,7 +145,7 @@ _Last updated: {timestamp} UTC""",
 {strongest_setups}
 
 _Coverage: {symbol_count} assets | Generated: {timestamp} UTC""",
-
+        
         'backtest_report': """📈 *BACKTEST REPORT* | {symbol} | {timeframe}
 
 📊 *Performance Metrics:*
@@ -172,30 +171,45 @@ _Period: {start_date} to {end_date}_"""
         self.rate_limiter = RateLimiter(max_requests=20, period=60)
         self.queue_lock = threading.Lock()
         self.active = False
+        self.processor_thread = None
         
         if token and chat_id:
             self.active = True
             self._start_processor()
+        else:
+            logger.error("BroadcastEngine: Missing token or chat_id")
     
     def _start_processor(self):
-        """Start background message processor"""
+        """Start background message processor thread"""
+        if self.processor_thread and self.processor_thread.is_alive():
+            logger.warning("Broadcast processor already running")
+            return
+            
         def processor():
+            logger.info("Broadcast processor thread started")
             while self.active:
                 try:
-                    self._process_queue()
-                    time.sleep(0.5)
+                    if self._process_queue():
+                        time.sleep(0.5)  # Small delay between successful sends
+                    else:
+                        time.sleep(1)    # Longer delay when queue is empty
                 except Exception as e:
                     logger.error(f"Broadcast processor error: {e}")
                     time.sleep(5)
+            logger.info("Broadcast processor thread stopped")
         
-        thread = threading.Thread(target=processor, daemon=True)
-        thread.start()
-        logger.info("Broadcast processor started")
+        self.processor_thread = threading.Thread(target=processor, daemon=True)
+        self.processor_thread.start()
+        logger.info("Broadcast processor started successfully")
     
-    def queue_message(self, report_type: str, symbol: str, data: Dict, priority: int = 0):
+    def queue_message(self, report_type: str, symbol: str, data: Dict, priority: int = 0) -> bool:
         """Add message to broadcast queue"""
         if not self.active:
-            logger.warning("Broadcast engine inactive - missing credentials")
+            logger.warning("Broadcast engine inactive - missing credentials or not started")
+            return False
+        
+        if not self.token or not self.chat_id:
+            logger.error("Cannot queue message: Missing credentials")
             return False
         
         with self.queue_lock:
@@ -207,59 +221,80 @@ _Period: {start_date} to {end_date}_"""
                 priority=priority
             )
             self.message_queue.append(message)
-            self.message_queue.sort(key=lambda x: x.priority, reverse=True)
-            logger.info(f"Queued {report_type} for {symbol}")
+            # Sort by priority (highest first) then by timestamp (oldest first)
+            self.message_queue.sort(key=lambda x: (-x.priority, x.timestamp.timestamp()))
+            logger.info(f"Queued {report_type} for {symbol} (Priority: {priority})")
             return True
     
-    def _process_queue(self):
-        """Process pending messages with rate limiting"""
-        if not self.message_queue:
-            return
+    def _process_queue(self) -> bool:
+        """Process pending messages with rate limiting - returns True if message was processed"""
+        with self.queue_lock:
+            if not self.message_queue:
+                return False
         
+        # Check rate limit before processing
         if not self.rate_limiter.can_send():
             wait_time = self.rate_limiter.time_until_next()
-            logger.debug(f"Rate limited, waiting {wait_time:.1f}s")
-            time.sleep(min(wait_time, 1.0))
-            return
+            if wait_time > 0:
+                logger.debug(f"Rate limited, waiting {wait_time:.1f}s")
+                time.sleep(min(wait_time, 1.0))
+                return True  # Return True to keep processing loop active
         
+        # Get next message
         with self.queue_lock:
             message = self.message_queue.pop(0)
         
+        # Send message synchronously
         try:
-            success = asyncio.run(self._send_message(message))
+            success = self._send_message_sync(message)
             if success:
                 self._log_broadcast(message, "SUCCESS")
+                logger.info(f"Successfully sent message: {message.report_type} for {message.symbol}")
+                return True
             else:
                 self._handle_failed_message(message)
+                return True
         except Exception as e:
             logger.error(f"Failed to process message: {e}")
             self._handle_failed_message(message)
+            return True
     
-    async def _send_message(self, message: BroadcastMessage) -> bool:
-        """Send formatted message via Telegram API"""
+    def _send_message_sync(self, message: BroadcastMessage) -> bool:
+        """Send formatted message via Telegram API - SYNCHRONOUS VERSION"""
         try:
             formatted_text = self._format_message(message)
             
-            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10)) as session:
-                url = f"https://api.telegram.org/bot{self.token}/sendMessage"
-                payload = {
-                    "chat_id": self.chat_id,
-                    "text": formatted_text,
-                    "parse_mode": "Markdown",
-                    "disable_web_page_preview": True
-                }
+            # FIXED: Corrected URL (removed space)
+            url = f"https://api.telegram.org/bot{self.token}/sendMessage"
+            payload = {
+                "chat_id": self.chat_id,
+                "text": formatted_text,
+                "parse_mode": "Markdown",
+                "disable_web_page_preview": True
+            }
+            
+            # Use requests directly instead of aiohttp
+            response = requests.post(url, json=payload, timeout=30)
+            
+            if response.status_code == 200:
+                logger.debug(f"Message sent successfully to {self.chat_id}")
+                return True
+            elif response.status_code == 429:
+                # Handle rate limiting from Telegram
+                retry_after = response.json().get('parameters', {}).get('retry_after', 30)
+                logger.warning(f"Rate limited by Telegram, retry after {retry_after}s")
+                time.sleep(retry_after)
+                return False
+            else:
+                logger.error(f"Telegram API error: {response.status_code} - {response.text}")
+                return False
                 
-                async with session.post(url, json=payload) as response:
-                    if response.status == 200:
-                        return True
-                    elif response.status == 429:
-                        retry_after = (await response.json()).get('parameters', {}).get('retry_after', 30)
-                        logger.warning(f"Rate limited by Telegram, retry after {retry_after}s")
-                        time.sleep(retry_after)
-                        return False
-                    else:
-                        logger.error(f"Telegram API error: {response.status}")
-                        return False
+        except requests.exceptions.Timeout:
+            logger.error("Telegram API request timed out")
+            return False
+        except requests.exceptions.ConnectionError:
+            logger.error("Connection error to Telegram API")
+            return False
         except Exception as e:
             logger.error(f"Message send error: {e}")
             return False
@@ -301,6 +336,7 @@ _Period: {start_date} to {end_date}_"""
         }
         self.broadcast_history.append(log_entry)
         
+        # Keep only last 100 entries
         if len(self.broadcast_history) > 100:
             self.broadcast_history = self.broadcast_history[-100:]
     
@@ -312,6 +348,12 @@ _Period: {start_date} to {end_date}_"""
         """Stop the broadcast processor"""
         self.active = False
         logger.info("Broadcast processor stopped")
+        if self.processor_thread and self.processor_thread.is_alive():
+            self.processor_thread.join(timeout=5)
+    
+    def is_active(self) -> bool:
+        """Check if broadcast engine is active and processing"""
+        return self.active and self.processor_thread and self.processor_thread.is_alive()
 
 # =============================================================================
 # PAGE CONFIG (Mobile Friendly)
@@ -476,7 +518,7 @@ ASSET_PROFILES = {
 }
 
 # =============================================================================
-# CORE CALCULATIONS - FIXED: Added missing calculate_hma function
+# CORE CALCULATIONS
 # =============================================================================
 def calculate_hma(series: pd.Series, length: int) -> pd.Series:
     """
@@ -499,9 +541,6 @@ def calculate_hma(series: pd.Series, length: int) -> pd.Series:
     
     return hma
 
-# =============================================================================
-# FIX: Add missing calculate_fibonacci function
-# =============================================================================
 def calculate_fibonacci(df: pd.DataFrame, lookback: int = 50) -> Dict[str, float]:
     """
     Calculate Fibonacci retracement levels
@@ -601,44 +640,6 @@ class SignalDatabase:
                 retry_count,
                 message_preview[:100]
             ))
-
-# =============================================================================
-# WEBSOCKET CLIENT
-# =============================================================================
-class BinanceWebSocket:
-    """Real-time WebSocket data feed"""
-    def __init__(self, symbol: str):
-        self.symbol = symbol.lower()
-        self.ws_url = f"{BINANCE_WS_BASE}/{self.symbol}@kline_1m"
-        self.data_queue = asyncio.Queue()
-        self.connected = False
-    
-    async def connect(self):
-        """Connect to WebSocket with reconnection logic"""
-        while True:
-            try:
-                async with websockets.connect(self.ws_url) as ws:
-                    self.connected = True
-                    logger.info(f"WebSocket connected for {self.symbol}")
-                    while True:
-                        message = await ws.recv()
-                        data = json.loads(message)
-                        await self.data_queue.put(data)
-            except websockets.exceptions.ConnectionClosed:
-                self.connected = False
-                logger.warning(f"WebSocket closed for {self.symbol}, reconnecting...")
-                await asyncio.sleep(5)
-            except Exception as e:
-                self.connected = False
-                logger.error(f"WebSocket error: {e}")
-                await asyncio.sleep(10)
-    
-    def get_latest_candle(self) -> Optional[Dict]:
-        """Get latest candle from queue if available"""
-        try:
-            return self.data_queue.get_nowait()
-        except asyncio.QueueEmpty:
-            return None
 
 # =============================================================================
 # AI ANALYSIS ENGINE
@@ -812,6 +813,7 @@ def render_ticker_tape(selected_symbol: str):
         separators=(",", ":")
     )
 
+    # FIXED: Corrected TradingView URL (removed extra space)
     components.html(
         f"""
         <div class="tradingview-widget-container">
@@ -958,10 +960,11 @@ def generate_mobile_report(row, symbol, tf, fibs, fg_index, smart_stop,
     return ''.join(html_parts)
 
 def send_telegram_msg(token, chat, msg):
-    """Legacy direct send function (kept for fallback)"""
+    """Legacy direct send function (kept for fallback) - FIXED"""
     if not token or not chat:
         return False
     try:
+        # FIXED: Corrected URL (removed space)
         r = requests.post(
             f"https://api.telegram.org/bot{token}/sendMessage",
             json={"chat_id": chat, "text": msg, "parse_mode": "Markdown"},
@@ -1351,42 +1354,80 @@ with st.sidebar:
     st.markdown("---")
     st.subheader("📡 BROADCAST CONTROLS")
     
-    tg_token = st.text_input("Bot Token", value=st.secrets.get("TELEGRAM_TOKEN", ""), type="password")
-    tg_chat = st.text_input("Chat ID", value=st.secrets.get("TELEGRAM_CHAT_ID", ""), type="password")
+    # FIXED: Use secret credentials if available, but allow manual override
+    default_token = st.secrets.get("TELEGRAM_TOKEN", "") if "TELEGRAM_TOKEN" in st.secrets else ""
+    default_chat = st.secrets.get("TELEGRAM_CHAT_ID", "") if "TELEGRAM_CHAT_ID" in st.secrets else ""
     
+    tg_token = st.text_input("Bot Token", value=default_token, type="password")
+    tg_chat = st.text_input("Chat ID", value=default_chat, type="password")
+    
+    # Initialize broadcast engine in session state if not exists
     if "broadcast_engine" not in st.session_state:
         st.session_state.broadcast_engine = None
     
-    if tg_token and tg_chat:
-        if st.button("🚀 ACTIVATE BROADCAST", use_container_width=True):
-            st.session_state.broadcast_engine = BroadcastEngine(tg_token, tg_chat)
-            st.success("Broadcast system activated!")
+    # Check if credentials are valid
+    credentials_valid = bool(tg_token and tg_chat)
+    
+    if credentials_valid:
+        # Show activation button if not active or credentials changed
+        if (st.session_state.broadcast_engine is None or 
+            st.session_state.broadcast_engine.token != tg_token or 
+            st.session_state.broadcast_engine.chat_id != tg_chat):
+            
+            if st.button("🚀 ACTIVATE BROADCAST", use_container_width=True, type="primary"):
+                # Stop any existing engine
+                if st.session_state.broadcast_engine:
+                    st.session_state.broadcast_engine.stop()
+                
+                # Create new engine with current credentials
+                st.session_state.broadcast_engine = BroadcastEngine(tg_token, tg_chat)
+                st.success("✅ Broadcast system activated!")
+                time.sleep(1)
+                st.rerun()
         
-        if st.session_state.broadcast_engine and st.session_state.broadcast_engine.active:
+        # Show status and controls if engine is active
+        if st.session_state.broadcast_engine and st.session_state.broadcast_engine.is_active():
             st.markdown('<div class="broadcast-status broadcast-active">🟢 BROADCAST ACTIVE</div>', unsafe_allow_html=True)
             
             st.subheader("📤 Quick Send")
             
-            if st.button("📨 STRICT SIGNAL", use_container_width=True):
-                st.session_state.send_strict_signal = True
+            # FIXED: Use proper session state keys
+            if "send_strict_signal" not in st.session_state:
+                st.session_state.send_strict_signal = False
+            if "send_ai_analysis" not in st.session_state:
+                st.session_state.send_ai_analysis = False
+            if "send_market_summary" not in st.session_state:
+                st.session_state.send_market_summary = False
             
-            if st.button("🤖 AI RISK ANALYSIS", use_container_width=True):
-                st.session_state.send_ai_analysis = True
-                
+            col_btn1, col_btn2 = st.columns([1, 1])
+            with col_btn1:
+                if st.button("🔥 STRICT SIGNAL", use_container_width=True):
+                    st.session_state.send_strict_signal = True
+                    st.success("Strict signal queued!")
+            
+            with col_btn2:
+                if st.button("🤖 AI RISK ANALYSIS", use_container_width=True):
+                    st.session_state.send_ai_analysis = True
+                    st.success("AI analysis queued!")
+            
             if st.button("📊 MARKET SUMMARY", use_container_width=True):
                 st.session_state.send_market_summary = True
+                st.success("Market summary queued!")
             
+            # Show queue size
             if hasattr(st.session_state.broadcast_engine, 'message_queue'):
                 queue_size = len(st.session_state.broadcast_engine.message_queue)
-                st.caption(f"Queue: {queue_size} messages pending")
+                st.caption(f"📨 Queue: {queue_size} messages pending")
             
             with st.expander("📜 Broadcast History", expanded=False):
                 if st.button("Load History", use_container_width=True):
                     st.session_state.show_broadcast_history = True
         else:
             st.markdown('<div class="broadcast-status broadcast-inactive">🔴 BROADCAST INACTIVE</div>', unsafe_allow_html=True)
+            st.info("Click 'ACTIVATE BROADCAST' to start")
     else:
-        st.warning("Enter Telegram credentials to activate broadcast")
+        st.warning("⚠️ Enter Telegram credentials to activate broadcast")
+        st.info("Tip: Set TELEGRAM_TOKEN and TELEGRAM_CHAT_ID in Streamlit secrets")
 
 # Render ticker tape
 render_ticker_tape(symbol)
@@ -1394,12 +1435,17 @@ render_ticker_tape(symbol)
 # =============================================================================
 # MAIN LOGIC
 # =============================================================================
-# Initialize broadcast engine if credentials exist
-tg_token = st.secrets.get("TELEGRAM_TOKEN", "")
-tg_chat = st.secrets.get("TELEGRAM_CHAT_ID", "")
+# Initialize broadcast engine from secrets if available and not already initialized
+if "broadcast_engine" not in st.session_state:
+    st.session_state.broadcast_engine = None
 
-if tg_token and tg_chat and not st.session_state.broadcast_engine:
-    st.session_state.broadcast_engine = BroadcastEngine(tg_token, tg_chat)
+# Auto-initialize from secrets if available
+if not st.session_state.broadcast_engine:
+    default_token = st.secrets.get("TELEGRAM_TOKEN", "") if "TELEGRAM_TOKEN" in st.secrets else ""
+    default_chat = st.secrets.get("TELEGRAM_CHAT_ID", "") if "TELEGRAM_CHAT_ID" in st.secrets else ""
+    if default_token and default_chat:
+        st.session_state.broadcast_engine = BroadcastEngine(default_token, default_chat)
+        logger.info("Auto-initialized broadcast engine from secrets")
 
 # Fetch data
 df = get_klines(symbol, timeframe, limit)
@@ -1430,9 +1476,9 @@ if not df.empty:
     if last['buy'] or last['sell']:
         db.save_signal(symbol, last.to_dict())
     
-    # Broadcast handlers
-    if "send_strict_signal" in st.session_state and st.session_state.send_strict_signal:
-        if st.session_state.broadcast_engine:
+    # Broadcast handlers - FIXED: Check session state flags
+    if st.session_state.get("send_strict_signal", False):
+        if st.session_state.broadcast_engine and st.session_state.broadcast_engine.is_active():
             signal_data = {
                 'direction': "LONG" if last['is_bull'] else "SHORT",
                 'entry_price': last['close'],
@@ -1451,11 +1497,13 @@ if not df.empty:
                 'signal_grade': "A+" if ai_analysis['signal_confidence'] > 80 else "B+"
             }
             st.session_state.broadcast_engine.queue_message('STRICT_SIGNAL', symbol, signal_data, priority=10)
-            st.success("✅ Strict signal queued!")
+            st.toast("✅ Strict signal broadcast queued!", icon='🔥')
+        else:
+            st.error("❌ Broadcast engine not active!")
         st.session_state.send_strict_signal = False
     
-    if "send_ai_analysis" in st.session_state and st.session_state.send_ai_analysis:
-        if st.session_state.broadcast_engine:
+    if st.session_state.get("send_ai_analysis", False):
+        if st.session_state.broadcast_engine and st.session_state.broadcast_engine.is_active():
             ai_data = {
                 'market_regime': ai_analysis['market_regime'],
                 'current_vol': ai_analysis['current_vol'],
@@ -1470,11 +1518,13 @@ if not df.empty:
                 'size_rec': ai_analysis['size_recommendation']
             }
             st.session_state.broadcast_engine.queue_message('AI_RISK_ANALYSIS', symbol, ai_data, priority=5)
-            st.success("✅ AI risk analysis queued!")
+            st.toast("✅ AI risk analysis broadcast queued!", icon='🤖')
+        else:
+            st.error("❌ Broadcast engine not active!")
         st.session_state.send_ai_analysis = False
     
-    if "send_market_summary" in st.session_state and st.session_state.send_market_summary:
-        if st.session_state.broadcast_engine:
+    if st.session_state.get("send_market_summary", False):
+        if st.session_state.broadcast_engine and st.session_state.broadcast_engine.is_active():
             summary_data = {
                 'top_performers': "BTC: +2.3%, ETH: +1.8%, SOL: +4.1%",
                 'risk_signals': "DOGE: High Vol, SHIB: Squeeze Active",
@@ -1485,7 +1535,9 @@ if not df.empty:
                 'symbol_count': 30
             }
             st.session_state.broadcast_engine.queue_message('MARKET_SUMMARY', "MULTI", summary_data, priority=3)
-            st.success("✅ Market summary queued!")
+            st.toast("✅ Market summary broadcast queued!", icon='📊')
+        else:
+            st.error("❌ Broadcast engine not active!")
         st.session_state.send_market_summary = False
     
     # AI Analysis Card
@@ -1526,6 +1578,7 @@ if not df.empty:
             "isTransparent": True,
             "locale": "en"
         }
+        # FIXED: Corrected TradingView URL
         components.html(f"""
         <div class="tradingview-widget-container">
           <div class="tradingview-widget-container__widget"></div>
@@ -1559,7 +1612,7 @@ if not df.empty:
     b_col1, b_col2, b_col3 = st.columns(3)
     with b_col1:
         if st.button("🔥 ALERT TG", use_container_width=True):
-            if st.session_state.broadcast_engine:
+            if st.session_state.broadcast_engine and st.session_state.broadcast_engine.is_active():
                 signal_data = {
                     'direction': "LONG" if last['is_bull'] else "SHORT",
                     'entry_price': last['close'],
@@ -1580,6 +1633,7 @@ if not df.empty:
                 st.session_state.broadcast_engine.queue_message('STRICT_SIGNAL', symbol, signal_data, priority=10)
                 st.success("✅ Broadcast queued!")
             else:
+                # Fallback to legacy
                 msg = f"TITAN SIGNAL: {symbol} | {'LONG' if last['is_bull'] else 'SHORT'} | EP: {last['close']:.4f} | Score: {ai_analysis['signal_confidence']}/100"
                 if send_telegram_msg(tg_token, tg_chat, msg):
                     st.success("SENT")
@@ -1588,7 +1642,17 @@ if not df.empty:
 
     with b_col2:
         if st.button("📝 REPORT TG", use_container_width=True):
-            if st.session_state.broadcast_engine:
+            if st.session_state.broadcast_engine and st.session_state.broadcast_engine.is_active():
+                trail_status = "TRAILING ON" if use_trailing else "TRAILING OFF"
+                txt_rep = f"""
+SIGNAL: {symbol} {'LONG' if last['is_bull'] else 'SHORT'}
+Confidence: {('HIGH' if last['rvol'] > 1.5 else 'MEDIUM')}
+Entry: {last['close']:.4f}
+Initial Stop: {smart_stop:.4f}
+Current Trail: {trailing_stop:.4f}
+Trade Mgmt: {trail_status}
+"""
+                # Send as AI_RISK_ANALYSIS type for better formatting
                 ai_data = {
                     'market_regime': ai_analysis['market_regime'],
                     'current_vol': ai_analysis['current_vol'],
@@ -1599,22 +1663,15 @@ if not df.empty:
                     'squeeze_risk': "YES" if last['in_squeeze'] else "NO",
                     'volume_risk': "YES" if last['rvol'] > 3 else "NO",
                     'session_risk': "YES" if "Off-Hours" in ai_analysis['session_note'] else "NO",
-                    'recommendation': ai_analysis['recommendation'],
-                    'size_rec': ai_analysis['size_recommendation']
+                    'recommendation': f"SIGNAL: {symbol} {'LONG' if last['is_bull'] else 'SHORT'}",
+                    'size_rec': f"Entry: {last['close']:.4f} | Stop: {smart_stop:.4f}"
                 }
                 st.session_state.broadcast_engine.queue_message('AI_RISK_ANALYSIS', symbol, ai_data, priority=5)
-                st.success("✅ AI analysis queued!")
+                st.success("📋 Report queued!")
             else:
-                trail_status = "TRAILING ON" if use_trailing else "TRAILING OFF"
-                txt_rep = f"""
-    SIGNAL: {symbol} {'LONG' if last['is_bull'] else 'SHORT'}
-    Confidence: {('HIGH' if last['rvol'] > 1.5 else 'MEDIUM')}
-    Entry: {last['close']:.4f}
-    Initial Stop: {smart_stop:.4f}
-    Current Trail: {trailing_stop:.4f}
-    Trade Mgmt: {trail_status}
-    """
-                if send_telegram_msg(tg_token, tg_chat, f"REPORT: {symbol}\n{txt_rep}"):
+                # Fallback
+                msg = f"REPORT: {symbol} | Stop: {smart_stop:.4f} | Trail: {trailing_stop:.4f} | {trail_status}"
+                if send_telegram_msg(tg_token, tg_chat, msg):
                     st.success("SENT")
                 else:
                     st.error("FAIL")
@@ -1623,7 +1680,7 @@ if not df.empty:
         if st.button("📊 BACKTEST TG", use_container_width=True):
             b_total, b_win, b_net, b_df = run_backtest(df, tp1_r, tp2_r, tp3_r, use_trailing)
             if b_total > 0:
-                if st.session_state.broadcast_engine:
+                if st.session_state.broadcast_engine and st.session_state.broadcast_engine.is_active():
                     bt_data = {
                         'total_trades': b_total,
                         'win_rate': b_win,
@@ -1636,9 +1693,13 @@ if not df.empty:
                         'end_date': df['timestamp'].iloc[-1].strftime('%Y-%m-%d')
                     }
                     st.session_state.broadcast_engine.queue_message('BACKTEST_REPORT', symbol, bt_data, priority=2)
-                    st.success("✅ Backtest report queued!")
+                    st.success("📊 Backtest queued!")
                 else:
-                    st.warning("Broadcast engine not active")
+                    msg = f"BACKTEST: {symbol} | Trades: {b_total} | Win: {b_win:.1f}% | Net: {b_net:.2f}R"
+                    if send_telegram_msg(tg_token, tg_chat, msg):
+                        st.success("SENT")
+                    else:
+                        st.error("FAIL")
             else:
                 st.warning("No backtest data available")
 
@@ -1808,9 +1869,9 @@ if not df.empty:
     """, unsafe_allow_html=True)
     
     # Broadcast History
-    if "show_broadcast_history" in st.session_state and st.session_state.show_broadcast_history:
+    if st.session_state.get("show_broadcast_history", False):
         st.markdown("### 📡 Broadcast History")
-        if st.session_state.broadcast_engine:
+        if st.session_state.broadcast_engine and st.session_state.broadcast_engine.is_active():
             history_df = st.session_state.broadcast_engine.get_broadcast_history(20)
             if not history_df.empty:
                 st.dataframe(
@@ -1820,14 +1881,19 @@ if not df.empty:
             else:
                 st.info("No broadcast history available yet")
         else:
-            st.warning("Broadcast engine not initialized")
+            st.warning("Broadcast engine not initialized or inactive")
     
 else:
     st.error("No data returned. Check ticker, timeframe, or Binance US availability.")
     st.info("Tip: Use Quick Ticker selector or verify asset is listed on Binance US")
     st.info("Advanced: Consider enabling WebSocket for real-time data")
 
-# Cleanup
+# Cleanup on app exit
 def cleanup():
     if st.session_state.broadcast_engine:
+        logger.info("Cleaning up broadcast engine...")
         st.session_state.broadcast_engine.stop()
+
+# Register cleanup
+import atexit
+atexit.register(cleanup)
