@@ -476,6 +476,30 @@ ASSET_PROFILES = {
 }
 
 # =============================================================================
+# CORE CALCULATIONS - FIXED: Added missing calculate_hma function
+# =============================================================================
+def calculate_hma(series: pd.Series, length: int) -> pd.Series:
+    """
+    Calculate Hull Moving Average (HMA)
+    HMA = WMA(2*WMA(n/2) - WMA(n), sqrt(n))
+    """
+    if len(series) < length:
+        return pd.Series([np.nan] * len(series), index=series.index)
+    
+    half_len = max(1, int(length / 2))
+    sqrt_len = max(1, int(math.sqrt(length)))
+    
+    # Calculate WMAs (using SMA as approximation for speed)
+    wma_f = series.rolling(window=length, min_periods=length).mean()
+    wma_h = series.rolling(window=half_len, min_periods=half_len).mean()
+    
+    # Hull MA calculation
+    hull = 2 * wma_h - wma_f
+    hma = hull.rolling(window=sqrt_len, min_periods=sqrt_len).mean()
+    
+    return hma
+
+# =============================================================================
 # DATABASE LAYER
 # =============================================================================
 class SignalDatabase:
