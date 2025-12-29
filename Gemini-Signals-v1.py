@@ -9,6 +9,7 @@ import sqlite3
 import json
 import asyncio
 import logging
+import html  # Added for HTML escaping in broadcast
 from typing import Dict, Optional, List, Tuple, Any
 from functools import wraps
 from datetime import datetime, timezone
@@ -94,11 +95,12 @@ class BroadcastEngine:
         'BACKTEST_REPORT': 'backtest_report'
     }
     
+    # FIXED: Converted to HTML templates for reliable delivery
     TEMPLATES = {
-        'strict_signal': """🔥 *TITAN TRADE ALERT* 🔥
+        'strict_signal': """🔥 <b>TITAN TRADE ALERT</b> 🔥
 
-📊 *{symbol}* | {timeframe}
-🎯 *{direction}* | Confidence: {confidence}%
+📊 <b>{symbol}</b> | {timeframe}
+🎯 <b>{direction}</b> | Confidence: {confidence}%
 💰 Entry: {entry_price:.4f}
 🛑 Stop: {stop_price:.4f}
 📈 TP1: {tp1:.4f} ({tp1_r}R)
@@ -110,59 +112,59 @@ class BroadcastEngine:
 
 ⏰ {timestamp} UTC""",
         
-        'ai_risk_analysis': """🤖 *AI RISK ANALYSIS* | {symbol}
+        'ai_risk_analysis': """🤖 <b>AI RISK ANALYSIS</b> | {symbol}
 
-📈 *Market Regime:* {market_regime}
-📊 *Volatility:* {current_vol} | Factor: {vol_factor:.1f}x
-⏰ *Session:* {session_note}
-🎯 *Timeframe Suitability:* {tf_score}/100
-🎓 *Asset Profile:* {asset_type}
+📈 <b>Market Regime:</b> {market_regime}
+📊 <b>Volatility:</b> {current_vol} | Factor: {vol_factor:.1f}x
+⏰ <b>Session:</b> {session_note}
+🎯 <b>Timeframe Suitability:</b> {tf_score}/100
+🎓 <b>Asset Profile:</b> {asset_type}
 
-⚠️ *Risk Factors:*
+⚠️ <b>Risk Factors:</b>
 • Squeeze Active: {squeeze_risk}
 • Volume Spike: {volume_risk}
 • Session Mismatch: {session_risk}
 
-💡 *AI Recommendation:*
+💡 <b>AI Recommendation:</b>
 {recommendation}
 
-🎯 *Position Sizing:* {size_rec}
+🎯 <b>Position Sizing:</b> {size_rec}
 
-_Last updated: {timestamp} UTC""",
+<i>Last updated: {timestamp} UTC</i>""",
         
-        'market_summary': """📊 *MARKET SUMMARY* | {timestamp}
+        'market_summary': """📊 <b>MARKET SUMMARY</b> | {timestamp}
 
-🌟 *Top Performers:*
+🌟 <b>Top Performers:</b>
 {top_performers}
 
-⚠️ *High Risk Signals:*
+⚠️ <b>High Risk Signals:</b>
 {risk_signals}
 
-📊 *Overall Market Sentiment:*
+📊 <b>Overall Market Sentiment:</b>
 • Fear & Greed: {fear_greed}/100
 • Avg RVOL: {avg_rvol:.2f}x
 • Squeeze Count: {squeeze_count}
 
-🔥 *Strongest Setups:*
+🔥 <b>Strongest Setups:</b>
 {strongest_setups}
 
-_Coverage: {symbol_count} assets | Generated: {timestamp} UTC""",
+<i>Coverage: {symbol_count} assets | Generated: {timestamp} UTC</i>""",
         
-        'backtest_report': """📈 *BACKTEST REPORT* | {symbol} | {timeframe}
+        'backtest_report': """📈 <b>BACKTEST REPORT</b> | {symbol} | {timeframe}
 
-📊 *Performance Metrics:*
+📊 <b>Performance Metrics:</b>
 • Total Trades: {total_trades}
 • Win Rate: {win_rate:.1f}%
 • Net PnL: {net_pnl:.2f}R
 • Avg TP Hit: {avg_tp:.1f}
 
-🎯 *Trade Distribution:*
+🎯 <b>Trade Distribution:</b>
 {trade_distribution}
 
-🤖 *AI Validation Rate:* {ai_validation:.1f}%
-⚡ *System Health:* {system_health}
+🤖 <b>AI Validation Rate:</b> {ai_validation:.1f}%
+⚡ <b>System Health:</b> {system_health}
 
-_Period: {start_date} to {end_date}_"""
+<i>Period: {start_date} to {end_date}</i>"""
     }
     
     def __init__(self, token: str, chat_id: str):
@@ -280,7 +282,7 @@ _Period: {start_date} to {end_date}_"""
             payload = {
                 "chat_id": self.chat_id,
                 "text": formatted_text,
-                "parse_mode": "Markdown",
+                "parse_mode": "HTML", # FIXED: Use HTML for robust parsing
                 "disable_web_page_preview": True
             }
             
@@ -319,10 +321,18 @@ _Period: {start_date} to {end_date}_"""
             template_key = self.REPORT_TYPES.get(message.report_type, 'strict_signal')
             template = self.TEMPLATES[template_key]
             
+            # FIXED: HTML escape strings to prevent broken tags
+            safe_data = {}
+            for k, v in message.data.items():
+                if isinstance(v, str):
+                    safe_data[k] = html.escape(v)
+                else:
+                    safe_data[k] = v
+            
             base_data = {
                 'symbol': message.symbol,
                 'timestamp': message.timestamp.strftime('%Y-%m-%d %H:%M:%S'),
-                **message.data
+                **safe_data
             }
             
             return template.format(**base_data)
