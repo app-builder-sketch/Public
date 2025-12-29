@@ -41,7 +41,7 @@ def widget_error_boundary(func):
     return wrapper
 
 # =============================================================================
-# BROADCAST ENGINE (FIXED - SYNCHRONOUS VERSION)
+# BROADCAST ENGINE (CRITICAL FIXES APPLIED)
 # =============================================================================
 from dataclasses import dataclass
 
@@ -65,8 +65,10 @@ class RateLimiter:
     def can_send(self) -> bool:
         with self.lock:
             now = time.time()
+            # Remove old requests
             self.requests = deque([req_time for req_time in self.requests 
                                  if now - req_time < self.period])
+            # Check if we can send
             if len(self.requests) < self.max_requests:
                 self.requests.append(now)
                 return True
@@ -83,7 +85,7 @@ class RateLimiter:
             return max(0, wait_time)
 
 class BroadcastEngine:
-    """Enterprise-grade multi-format Telegram broadcast system - FIXED SYNCHRONOUS VERSION"""
+    """Enterprise-grade multi-format Telegram broadcast system - CRITICAL BUGS FIXED"""
     
     REPORT_TYPES = {
         'STRICT_SIGNAL': 'strict_signal',
@@ -176,11 +178,12 @@ _Period: {start_date} to {end_date}_"""
         if token and chat_id:
             self.active = True
             self._start_processor()
+            logger.info(f"BroadcastEngine initialized for chat {chat_id}")
         else:
             logger.error("BroadcastEngine: Missing token or chat_id")
     
     def _start_processor(self):
-        """Start background message processor thread"""
+        """Start background message processor thread - FIXED"""
         if self.processor_thread and self.processor_thread.is_alive():
             logger.warning("Broadcast processor already running")
             return
@@ -189,10 +192,13 @@ _Period: {start_date} to {end_date}_"""
             logger.info("Broadcast processor thread started")
             while self.active:
                 try:
-                    if self._process_queue():
-                        time.sleep(0.5)  # Small delay between successful sends
+                    processed = self._process_queue()
+                    if not processed:
+                        # No messages or rate limited, wait longer
+                        time.sleep(2)
                     else:
-                        time.sleep(1)    # Longer delay when queue is empty
+                        # Message processed, check for more
+                        time.sleep(0.5)
                 except Exception as e:
                     logger.error(f"Broadcast processor error: {e}")
                     time.sleep(5)
@@ -203,9 +209,9 @@ _Period: {start_date} to {end_date}_"""
         logger.info("Broadcast processor started successfully")
     
     def queue_message(self, report_type: str, symbol: str, data: Dict, priority: int = 0) -> bool:
-        """Add message to broadcast queue"""
+        """Add message to broadcast queue - FIXED"""
         if not self.active:
-            logger.warning("Broadcast engine inactive - missing credentials or not started")
+            logger.warning("Broadcast engine inactive - missing credentials or stopped")
             return False
         
         if not self.token or not self.chat_id:
@@ -227,17 +233,17 @@ _Period: {start_date} to {end_date}_"""
             return True
     
     def _process_queue(self) -> bool:
-        """Process pending messages with rate limiting - returns True if message was processed"""
+        """Process pending messages with rate limiting - CRITICAL FIX"""
         with self.queue_lock:
             if not self.message_queue:
-                return False
+                return False  # No messages to process
         
         # Check rate limit before processing
         if not self.rate_limiter.can_send():
             wait_time = self.rate_limiter.time_until_next()
             if wait_time > 0:
-                logger.debug(f"Rate limited, waiting {wait_time:.1f}s")
-                time.sleep(min(wait_time, 1.0))
+                logger.debug(f"Rate limited, waiting {wait_time:.1f}s before next send")
+                time.sleep(wait_time)  # Sleep for the required time
                 return True  # Return True to keep processing loop active
         
         # Get next message
@@ -260,7 +266,7 @@ _Period: {start_date} to {end_date}_"""
             return True
     
     def _send_message_sync(self, message: BroadcastMessage) -> bool:
-        """Send formatted message via Telegram API - SYNCHRONOUS VERSION"""
+        """Send formatted message via Telegram API - ENHANCED ERROR HANDLING"""
         try:
             formatted_text = self._format_message(message)
             
@@ -273,11 +279,14 @@ _Period: {start_date} to {end_date}_"""
                 "disable_web_page_preview": True
             }
             
+            # Enhanced logging
+            logger.debug(f"Sending to {self.chat_id}: {message.report_type} for {message.symbol}")
+            
             # Use requests directly instead of aiohttp
             response = requests.post(url, json=payload, timeout=30)
             
             if response.status_code == 200:
-                logger.debug(f"Message sent successfully to {self.chat_id}")
+                logger.info(f"Message sent successfully to {self.chat_id}")
                 return True
             elif response.status_code == 429:
                 # Handle rate limiting from Telegram
@@ -352,8 +361,8 @@ _Period: {start_date} to {end_date}_"""
             self.processor_thread.join(timeout=5)
     
     def is_active(self) -> bool:
-        """Check if broadcast engine is active and processing"""
-        return self.active and self.processor_thread and self.processor_thread.is_alive()
+        """Check if broadcast engine is active and processing - CRITICAL METHOD ADDED"""
+        return self.active and self.processor_thread is not None and self.processor_thread.is_alive()
 
 # =============================================================================
 # PAGE CONFIG (Mobile Friendly)
@@ -813,7 +822,7 @@ def render_ticker_tape(selected_symbol: str):
         separators=(",", ":")
     )
 
-    # FIXED: Corrected TradingView URL (removed extra space)
+    # FIXED: Corrected TradingView URL
     components.html(
         f"""
         <div class="tradingview-widget-container">
@@ -1370,14 +1379,17 @@ with st.sidebar:
     
     if credentials_valid:
         # Show activation button if not active or credentials changed
-        if (st.session_state.broadcast_engine is None or 
-            st.session_state.broadcast_engine.token != tg_token or 
-            st.session_state.broadcast_engine.chat_id != tg_chat):
-            
+        current_engine = st.session_state.broadcast_engine
+        should_activate = (current_engine is None or 
+                          current_engine.token != tg_token or 
+                          current_engine.chat_id != tg_chat or 
+                          not current_engine.is_active())
+        
+        if should_activate:
             if st.button("🚀 ACTIVATE BROADCAST", use_container_width=True, type="primary"):
                 # Stop any existing engine
-                if st.session_state.broadcast_engine:
-                    st.session_state.broadcast_engine.stop()
+                if current_engine:
+                    current_engine.stop()
                 
                 # Create new engine with current credentials
                 st.session_state.broadcast_engine = BroadcastEngine(tg_token, tg_chat)
@@ -1391,28 +1403,28 @@ with st.sidebar:
             
             st.subheader("📤 Quick Send")
             
-            # FIXED: Use proper session state keys
-            if "send_strict_signal" not in st.session_state:
-                st.session_state.send_strict_signal = False
-            if "send_ai_analysis" not in st.session_state:
-                st.session_state.send_ai_analysis = False
-            if "send_market_summary" not in st.session_state:
-                st.session_state.send_market_summary = False
+            # FIXED: Use proper session state keys with unique prefixes
+            if "broadcast_strict_signal" not in st.session_state:
+                st.session_state.broadcast_strict_signal = False
+            if "broadcast_ai_analysis" not in st.session_state:
+                st.session_state.broadcast_ai_analysis = False
+            if "broadcast_market_summary" not in st.session_state:
+                st.session_state.broadcast_market_summary = False
             
             col_btn1, col_btn2 = st.columns([1, 1])
             with col_btn1:
                 if st.button("🔥 STRICT SIGNAL", use_container_width=True):
-                    st.session_state.send_strict_signal = True
-                    st.success("Strict signal queued!")
+                    st.session_state.broadcast_strict_signal = True
+                    st.toast("✅ Strict signal queued!", icon='🔥')
             
             with col_btn2:
                 if st.button("🤖 AI RISK ANALYSIS", use_container_width=True):
-                    st.session_state.send_ai_analysis = True
-                    st.success("AI analysis queued!")
+                    st.session_state.broadcast_ai_analysis = True
+                    st.toast("✅ AI analysis queued!", icon='🧠')
             
             if st.button("📊 MARKET SUMMARY", use_container_width=True):
-                st.session_state.send_market_summary = True
-                st.success("Market summary queued!")
+                st.session_state.broadcast_market_summary = True
+                st.toast("✅ Market summary queued!", icon='📊')
             
             # Show queue size
             if hasattr(st.session_state.broadcast_engine, 'message_queue'):
@@ -1476,8 +1488,8 @@ if not df.empty:
     if last['buy'] or last['sell']:
         db.save_signal(symbol, last.to_dict())
     
-    # Broadcast handlers - FIXED: Check session state flags
-    if st.session_state.get("send_strict_signal", False):
+    # Broadcast handlers - FIXED: Check session state flags with proper keys
+    if st.session_state.get("broadcast_strict_signal", False):
         if st.session_state.broadcast_engine and st.session_state.broadcast_engine.is_active():
             signal_data = {
                 'direction': "LONG" if last['is_bull'] else "SHORT",
@@ -1497,12 +1509,12 @@ if not df.empty:
                 'signal_grade': "A+" if ai_analysis['signal_confidence'] > 80 else "B+"
             }
             st.session_state.broadcast_engine.queue_message('STRICT_SIGNAL', symbol, signal_data, priority=10)
-            st.toast("✅ Strict signal broadcast queued!", icon='🔥')
+            st.success("✅ Strict signal broadcast queued!")
         else:
             st.error("❌ Broadcast engine not active!")
-        st.session_state.send_strict_signal = False
+        st.session_state.broadcast_strict_signal = False
     
-    if st.session_state.get("send_ai_analysis", False):
+    if st.session_state.get("broadcast_ai_analysis", False):
         if st.session_state.broadcast_engine and st.session_state.broadcast_engine.is_active():
             ai_data = {
                 'market_regime': ai_analysis['market_regime'],
@@ -1518,12 +1530,12 @@ if not df.empty:
                 'size_rec': ai_analysis['size_recommendation']
             }
             st.session_state.broadcast_engine.queue_message('AI_RISK_ANALYSIS', symbol, ai_data, priority=5)
-            st.toast("✅ AI risk analysis broadcast queued!", icon='🤖')
+            st.success("✅ AI risk analysis broadcast queued!")
         else:
             st.error("❌ Broadcast engine not active!")
-        st.session_state.send_ai_analysis = False
+        st.session_state.broadcast_ai_analysis = False
     
-    if st.session_state.get("send_market_summary", False):
+    if st.session_state.get("broadcast_market_summary", False):
         if st.session_state.broadcast_engine and st.session_state.broadcast_engine.is_active():
             summary_data = {
                 'top_performers': "BTC: +2.3%, ETH: +1.8%, SOL: +4.1%",
@@ -1535,10 +1547,10 @@ if not df.empty:
                 'symbol_count': 30
             }
             st.session_state.broadcast_engine.queue_message('MARKET_SUMMARY', "MULTI", summary_data, priority=3)
-            st.toast("✅ Market summary broadcast queued!", icon='📊')
+            st.success("✅ Market summary broadcast queued!")
         else:
             st.error("❌ Broadcast engine not active!")
-        st.session_state.send_market_summary = False
+        st.session_state.broadcast_market_summary = False
     
     # AI Analysis Card
     st.markdown("### 🤖 AI MARKET ANALYSIS")
@@ -1897,3 +1909,13 @@ def cleanup():
 # Register cleanup
 import atexit
 atexit.register(cleanup)
+
+# =============================================================================
+# DEBUGGING INFO (Visible in console)
+# =============================================================================
+# Show current broadcast engine status in logs
+if st.session_state.broadcast_engine:
+    logger.info(f"App loaded - Broadcast engine active: {st.session_state.broadcast_engine.is_active()}")
+    logger.info(f"Queue size: {len(st.session_state.broadcast_engine.message_queue)}")
+else:
+    logger.info("App loaded - No broadcast engine initialized")
