@@ -315,16 +315,20 @@ _Period: {start_date} to {end_date}_"""
     
     def _format_message(self, message: BroadcastMessage) -> str:
         """Format message according to report type"""
-        template_key = self.REPORT_TYPES.get(message.report_type, 'strict_signal')
-        template = self.TEMPLATES[template_key]
-        
-        base_data = {
-            'symbol': message.symbol,
-            'timestamp': message.timestamp.strftime('%Y-%m-%d %H:%M:%S'),
-            **message.data
-        }
-        
-        return template.format(**base_data)
+        try:
+            template_key = self.REPORT_TYPES.get(message.report_type, 'strict_signal')
+            template = self.TEMPLATES[template_key]
+            
+            base_data = {
+                'symbol': message.symbol,
+                'timestamp': message.timestamp.strftime('%Y-%m-%d %H:%M:%S'),
+                **message.data
+            }
+            
+            return template.format(**base_data)
+        except Exception as e:
+            logger.error(f"Template formatting error: {e}")
+            return f"⚠️ Error formatting message for {message.symbol}"
     
     def _handle_failed_message(self, message: BroadcastMessage):
         """Handle failed message with retry logic"""
@@ -1267,12 +1271,12 @@ def run_backtest(df, tp1_r, tp2_r, tp3_r, use_trailing):
 # Initialize database
 db = SignalDatabase()
 
-# Initialize broadcast engine in session state if not exists - MOVED UP FOR SAFETY
+# CRITICAL FIX: Initialize broadcast engine BEFORE sidebar to ensure it persists 
+# and is available for sidebar buttons on first load
 if "broadcast_engine" not in st.session_state:
     st.session_state.broadcast_engine = None
 
-# Auto-initialize from secrets if available - CRITICAL FIX: MOVED UP
-# This ensures engine is ready BEFORE sidebar controls load
+# Auto-initialize from secrets if available
 if not st.session_state.broadcast_engine:
     default_token = st.secrets.get("TELEGRAM_TOKEN", "") if "TELEGRAM_TOKEN" in st.secrets else ""
     default_chat = st.secrets.get("TELEGRAM_CHAT_ID", "") if "TELEGRAM_CHAT_ID" in st.secrets else ""
@@ -1347,7 +1351,8 @@ with st.sidebar:
 
     symbol_input = st.text_input("Asset", value=st.session_state.symbol_input)
     st.session_state.symbol_input = symbol_input
-    symbol = symbol_input.strip().upper().replace("/", "").replace("-", "")
+    # FIXED: Remove underscores to prevent markdown formatting errors in Telegram
+    symbol = symbol_input.strip().upper().replace("/", "").replace("-", "").replace("_", "")
     if not symbol.endswith("USDT"):
         symbol += "USDT"
 
