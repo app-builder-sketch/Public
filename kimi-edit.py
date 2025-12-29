@@ -1,810 +1,551 @@
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
-import { 
-  Send, TrendingUp, BarChart3, Code, Settings, LayoutDashboard,
-  Loader2, Terminal, Check, ExternalLink, ShieldAlert, BrainCircuit,
-  Copy, CheckCircle, AlertCircle, Activity, Layers, Search, Zap
-} from 'lucide-react';
-import { MarketChart } from './components/MarketChart';
-import { useDebounce } from './hooks/useDebounce';
-import { 
-  TradingSignal, SignalDirection, AnalysisReport, 
-  TelegramConfig, AnalysisDepth 
-} from './types';
-import { generateTechnicalReport, generatePineScript } from './services/geminiService';
-import { sendSignalToTelegram, sendReportToTelegram } from './services/telegramService';
+# streamlit_app.py
+import streamlit as st
+import pandas as pd
+import plotly.graph_objects as go
+from datetime import datetime
+import time
+import json
+import requests
+import google.generativeai as genai
+from enum import Enum
+from typing import Optional, Dict, Any, List
+import re
 
-// Environment Configuration (Secure)
-const ENV_CONFIG: TelegramConfig = {
-  botToken: import.meta.env.VITE_TELEGRAM_BOT_TOKEN,
-  chatId: import.meta.env.VITE_TELEGRAM_CHAT_ID
-};
+# ──────────────────────────────────────────────────────────────
+# CONFIGURATION & SECRETS
+# ──────────────────────────────────────────────────────────────
+# Add to .streamlit/secrets.toml:
+# [telegram]
+# bot_token = "YOUR_BOT_TOKEN"
+# chat_id = "YOUR_CHAT_ID"
+# [gemini]
+# api_key = "YOUR_GEMINI_API_KEY"
 
-const App: React.FC = () => {
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'reports' | 'pinescript' | 'settings'>('dashboard');
-  const [loading, setLoading] = useState(false);
-  const [logs, setLogs] = useState<string[]>([
-    "[SYSTEM] Core Engine: Gemini 3.0 / Pine V6.0 Active", 
-    "[INFO] Neural reasoning pipelines established..."
-  ]);
-  const [errors, setErrors] = useState<string[]>([]);
-  const [copied, setCopied] = useState(false);
+class Config:
+    TELEGRAM_BOT_TOKEN = st.secrets.get("telegram", {}).get("bot_token", "")
+    TELEGRAM_CHAT_ID = st.secrets.get("telegram", {}).get("chat_id", "")
+    GEMINI_API_KEY = st.secrets.get("gemini", {}).get("api_key", "")
 
-  // Signal State
-  const [signal, setSignal] = useState<TradingSignal>({
-    id: crypto.randomUUID(),
-    symbol: 'BTC/USDT',
-    direction: SignalDirection.BUY,
-    entry: 64250,
-    tp1: 65500,
-    tp2: 67000,
-    tp3: 69000,
-    sl: 63000,
-    timeframe: '1H',
-    strategy: 'Neural Momentum + RSI 6.0',
-    timestamp: new Date()
-  });
-  
-  const [signalIntelMode, setSignalIntelMode] = useState<'NONE' | 'QUICK' | 'DEEP'>('NONE');
-  const [intelPreview, setIntelPreview] = useState<string | null>(null);
-  
-  // Report State
-  const [analysisContext, setAnalysisContext] = useState('');
-  const [reportDepth, setReportDepth] = useState<AnalysisDepth>(AnalysisDepth.DETAILED);
-  const [currentReport, setCurrentReport] = useState<AnalysisReport | null>(null);
-  
-  // Pine Script State
-  const [pineScript, setPineScript] = useState('');
-  const [pinePrompt, setPinePrompt] = useState('');
+# ──────────────────────────────────────────────────────────────
+# TYPE DEFINITIONS
+# ──────────────────────────────────────────────────────────────
+class SignalDirection(Enum):
+    BUY = "BUY"
+    SELL = "SELL"
 
-  // Debounced symbol for AI calls
-  const debouncedSymbol = useDebounce(signal.symbol, 1000);
+class AnalysisDepth(Enum):
+    QUICK = "QUICK"
+    DETAILED = "DETAILED"
+    QUANT = "QUANT"
 
-  // Auto-generate intelligence when symbol changes
-  useEffect(() => {
-    if (signalIntelMode !== 'NONE' && debouncedSymbol) {
-      handleGenerateSignalIntel();
-    }
-  }, [debouncedSymbol, signalIntelMode]);
+# ──────────────────────────────────────────────────────────────
+# SESSION STATE INITIALIZATION
+# ──────────────────────────────────────────────────────────────
+def init_session_state():
+    if "logs" not in st.session_state:
+        st.session_state.logs = [
+            "[SYSTEM] Core Engine: Gemini 3.0 / Pine V6.0 Active",
+            "[INFO] Neural reasoning pipelines established..."
+        ]
+    if "signal" not in st.session_state:
+        st.session_state.signal = {
+            "symbol": "BTC/USDT",
+            "direction": SignalDirection.BUY.value,
+            "entry": 64250.0,
+            "tp1": 65500.0,
+            "tp2": 67000.0,
+            "tp3": 69000.0,
+            "sl": 63000.0,
+            "timeframe": "1H",
+            "strategy": "Neural Momentum + RSI 6.0"
+        }
+    if "errors" not in st.session_state:
+        st.session_state.errors = []
+    if "current_report" not in st.session_state:
+        st.session_state.current_report = None
+    if "pine_script" not in st.session_state:
+        st.session_state.pine_script = ""
 
-  // Memoized Computed Values
-  const signalPreview = useMemo(() => {
-    const directionEmoji = signal.direction === SignalDirection.BUY ? '🟢' : '🔴';
-    const directionColor = signal.direction === SignalDirection.BUY ? 'text-emerald-400' : 'text-rose-400';
+def add_log(message: str):
+    timestamp = datetime.now().strftime("%H:%M:%S")
+    st.session_state.logs.append(f"[{timestamp}] {message}")
+
+# ──────────────────────────────────────────────────────────────
+# VALIDATION ENGINE
+# ──────────────────────────────────────────────────────────────
+def validate_signal(signal: Dict[str, Any]) -> List[str]:
+    errors = []
+    direction = signal["direction"]
     
-    return {
-      header: `🚀 SIGNAL: ${signal.symbol} 🚀`,
-      directionText: `${directionEmoji} ${signal.direction}`,
-      directionColor,
-      logicStatus: errors.length === 0 ? 'VERIFIED' : 'INVALID',
-      logicStatusColor: errors.length === 0 ? 'bg-emerald-500/10 text-emerald-500' : 'bg-rose-500/10 text-rose-500'
-    };
-  }, [signal, errors]);
-
-  // Logger Utility
-  const addLog = useCallback((msg: string) => {
-    const timestamp = new Date().toLocaleTimeString('en-US', { hour12: false });
-    setLogs(prev => [...prev, `[${timestamp}] ${msg}`]);
-  }, []);
-
-  // Enhanced Validation Logic
-  const validateSignal = useCallback((): boolean => {
-    const errs: string[] = [];
-    const { symbol, entry, tp1, tp2, tp3, sl, direction } = signal;
-
-    if (!symbol.trim()) {
-      errs.push("Critical Error: Market Symbol identification missing.");
-    }
-
-    if (direction === SignalDirection.BUY) {
-      if (sl >= entry) errs.push(`BUY Logic: SL (${sl}) must be < Entry (${entry})`);
-      if (entry >= tp1) errs.push(`BUY Logic: Entry (${entry}) must be < TP1 (${tp1})`);
-      if (tp1 >= tp2) errs.push(`BUY Logic: TP1 (${tp1}) must be < TP2 (${tp2})`);
-      if (tp2 >= tp3) errs.push(`BUY Logic: TP2 (${tp2}) must be < TP3 (${tp3})`);
-    } else {
-      if (sl <= entry) errs.push(`SELL Logic: SL (${sl}) must be > Entry (${entry})`);
-      if (entry <= tp1) errs.push(`SELL Logic: Entry (${entry}) must be > TP1 (${tp1})`);
-      if (tp1 <= tp2) errs.push(`SELL Logic: TP1 (${tp1}) must be > TP2 (${tp2})`);
-      if (tp2 <= tp3) errs.push(`SELL Logic: TP2 (${tp2}) must be > TP3 (${tp3})`);
-    }
-
-    setErrors(errs);
-    if (errs.length > 0) {
-      addLog(`[ERROR] Protocol Violation: ${errs.length} inconsistencies detected.`);
-    }
-    return errs.length === 0;
-  }, [signal, addLog]);
-
-  // AI Intelligence Generation
-  const handleGenerateSignalIntel = useCallback(async () => {
-    if (!signal.symbol) return;
+    if not signal["symbol"].strip():
+        errors.append("Critical Error: Market Symbol identification missing.")
     
-    setLoading(true);
-    addLog(`[AI] Invoking Gemini 3.0 reasoning for ${signal.symbol}...`);
+    if signal["entry"] <= 0:
+        errors.append(f"Structural Error: Entry price ({signal['entry']}) must be positive.")
     
-    try {
-      const depth = signalIntelMode === 'QUICK' ? AnalysisDepth.QUICK : AnalysisDepth.DETAILED;
-      const report = await generateTechnicalReport(
-        signal.symbol, 
-        signal.timeframe, 
-        `Analyze: ${signal.direction} ${signal.symbol}. Strategy: ${signal.strategy}`, 
-        depth
-      );
-      
-      setIntelPreview(report.summary);
-      addLog(`[AI] Intelligence synthesis complete. Outlook: ${report.outlook}`);
-    } catch (err: any) {
-      addLog(`[ERROR] AI Synthesis failed: ${err.message}`);
-    } finally {
-      setLoading(false);
-    }
-  }, [signal, signalIntelMode, addLog]);
-
-  // Signal Broadcasting
-  const handleBroadcastSignal = useCallback(async () => {
-    if (!validateSignal()) return;
+    # Detailed Chained Validation
+    if direction == SignalDirection.BUY.value:
+        if signal["sl"] >= signal["entry"]:
+            errors.append(f"BUY Logic Error: Stop Loss ({signal['sl']}) must be strictly lower than Entry ({signal['entry']}).")
+        if signal["entry"] >= signal["tp1"]:
+            errors.append(f"BUY Logic Error: Take Profit 1 ({signal['tp1']}) must be strictly higher than Entry ({signal['entry']}).")
+        if signal["tp1"] >= signal["tp2"]:
+            errors.append(f"BUY Logic Error: Take Profit 2 ({signal['tp2']}) must be strictly higher than Take Profit 1 ({signal['tp1']}).")
+        if signal["tp2"] >= signal["tp3"]:
+            errors.append(f"BUY Logic Error: Take Profit 3 ({signal['tp3']}) must be strictly higher than Take Profit 2 ({signal['tp2']}).")
+    else:
+        if signal["sl"] <= signal["entry"]:
+            errors.append(f"SELL Logic Error: Stop Loss ({signal['sl']}) must be strictly higher than Entry ({signal['entry']}).")
+        if signal["entry"] <= signal["tp1"]:
+            errors.append(f"SELL Logic Error: Take Profit 1 ({signal['tp1']}) must be strictly lower than Entry ({signal['entry']}).")
+        if signal["tp1"] <= signal["tp2"]:
+            errors.append(f"SELL Logic Error: Take Profit 2 ({signal['tp2']}) must be strictly lower than Take Profit 1 ({signal['tp1']}).")
+        if signal["tp2"] <= signal["tp3"]:
+            errors.append(f"SELL Logic Error: Take Profit 3 ({signal['tp3']}) must be strictly lower than Take Profit 2 ({signal['tp2']}).")
     
-    if (!ENV_CONFIG.botToken || !ENV_CONFIG.chatId) {
-      addLog("[ERROR] Gateway Auth Error: Telegram credentials undefined.");
-      setActiveTab('settings');
-      return;
-    }
+    if errors:
+        add_log(f"[ERROR] Protocol Violation Detected: {len(errors)} mathematical inconsistencies.")
     
-    setLoading(true);
-    addLog(`[ACTION] Deploying neural broadcast: ${signal.symbol}`);
+    return errors
+
+# ──────────────────────────────────────────────────────────────
+# AI SERVICES
+# ──────────────────────────────────────────────────────────────
+def initialize_gemini():
+    try:
+        genai.configure(api_key=Config.GEMINI_API_KEY)
+        return True
+    except:
+        return False
+
+def generate_technical_report(symbol: str, timeframe: str, context: str, depth: AnalysisDepth) -> Optional[Dict[str, Any]]:
+    if not Config.GEMINI_API_KEY:
+        add_log("[ERROR] Gemini API key not configured in secrets")
+        return None
     
-    try {
-      let finalSignal = { ...signal };
-      if (signalIntelMode !== 'NONE') {
-        const depth = signalIntelMode === 'QUICK' ? AnalysisDepth.QUICK : AnalysisDepth.DETAILED;
-        const report = await generateTechnicalReport(
-          signal.symbol, 
-          signal.timeframe, 
-          signal.strategy, 
-          depth
-        );
-        finalSignal.strategy = `${signal.strategy}\n\n🤖 GEMINI 3 INTEL:\n${report.summary}`;
-      }
-      
-      await sendSignalToTelegram(ENV_CONFIG, finalSignal);
-      addLog("[SUCCESS] Broadcast delivered via Secure Telegram Gateway.");
-      setErrors([]);
-    } catch (err: any) {
-      addLog(`[ERROR] Protocol Error: ${err.message}`);
-    } finally {
-      setLoading(false);
-    }
-  }, [signal, signalIntelMode, validateSignal, addLog]);
+    try:
+        model = genai.GenerativeModel('gemini-pro')
+        temperature = 0.1 if depth == AnalysisDepth.QUANT else 0.3
+        
+        prompt = f"""
+        Conduct a {depth.value} technical analysis for {symbol} on {timeframe} timeframe.
+        Context: {context}
+        
+        Provide response in JSON format:
+        {{
+            "title": "Asset Analysis",
+            "outlook": "BULLISH|BEARISH|NEUTRAL",
+            "summary": "Executive summary in 2-3 sentences",
+            "technicalDetails": "Detailed analysis with key levels and indicators",
+            "sources": [{{"title": "Source Name", "uri": "https://..."}}]
+        }}
+        """
+        
+        response = model.generate_content(
+            prompt,
+            generation_config={"temperature": temperature}
+        )
+        
+        cleaned_response = response.text.replace("```json", "").replace("```", "").strip()
+        return json.loads(cleaned_response)
+        
+    except Exception as e:
+        add_log(f"[ERROR] AI Synthesis failed: {str(e)}")
+        return None
 
-  // Report Generation
-  const handleGenerateReport = useCallback(async () => {
-    if (!analysisContext) return;
+def generate_pine_script(name: str, logic: str) -> str:
+    if not Config.GEMINI_API_KEY:
+        add_log("[ERROR] Gemini API key not configured in secrets")
+        return "// Error: API key missing"
     
-    setLoading(true);
-    const isQuant = reportDepth === AnalysisDepth.QUANT;
-    addLog(`[AI] Initializing ${reportDepth} Neural ${isQuant ? 'Thinking' : 'Flash'}...`);
+    try:
+        model = genai.GenerativeModel('gemini-pro')
+        
+        prompt = f"""
+        Generate a complete Pine Script v6.0 indicator based on: {logic}
+        Requirements:
+        - Use //@version=6
+        - Include proper input() declarations
+        - Add alertcondition() for signals
+        - Use explicit variable typing
+        - Follow TradingView style guide
+        
+        Return ONLY the code without explanations.
+        """
+        
+        response = model.generate_content(prompt, generation_config={"temperature": 0.2})
+        return response.text.replace("```pinescript", "").replace("```", "").strip()
+        
+    except Exception as e:
+        add_log(f"[ERROR] Compilation failed: {str(e)}")
+        return f"// Error: {str(e)}"
+
+# ──────────────────────────────────────────────────────────────
+# TELEGRAM SERVICES
+# ──────────────────────────────────────────────────────────────
+def send_to_telegram(message: str, parse_mode: str = "HTML") -> bool:
+    if not Config.TELEGRAM_BOT_TOKEN or not Config.TELEGRAM_CHAT_ID:
+        add_log("[ERROR] Gateway Auth Error: Telegram credentials undefined")
+        return False
     
-    try {
-      const report = await generateTechnicalReport(
-        signal.symbol, 
-        signal.timeframe, 
-        analysisContext, 
-        reportDepth
-      );
-      setCurrentReport(report);
-      addLog(`[SUCCESS] Synthesis complete. Reasoning fidelity: High.`);
-    } catch (err: any) {
-      addLog(`[ERROR] Neural engine mismatch: ${err.message}`);
-    } finally {
-      setLoading(false);
-    }
-  }, [analysisContext, reportDepth, signal.symbol, signal.timeframe, addLog]);
-
-  const handleBroadcastReport = useCallback(async () => {
-    if (!ENV_CONFIG.botToken || !ENV_CONFIG.chatId || !currentReport) {
-      addLog("[ERROR] Broadcast failed: Missing credentials or report.");
-      setActiveTab('settings');
-      return;
-    }
-    
-    setLoading(true);
-    addLog(`[ACTION] Deploying intelligence broadcast: ${currentReport.title}`);
-    
-    try {
-      await sendReportToTelegram(ENV_CONFIG, currentReport);
-      addLog("[SUCCESS] Intelligence synthesis delivered.");
-    } catch (err: any) {
-      addLog(`[ERROR] Protocol Error: ${err.message}`);
-    } finally {
-      setLoading(false);
-    }
-  }, [currentReport, addLog]);
-
-  // Pine Script Generation
-  const handleGeneratePine = useCallback(async () => {
-    if (!pinePrompt) return;
-    
-    setLoading(true);
-    addLog("[AI] Compiling logic to Pine Script v6.0...");
-    
-    try {
-      const code = await generatePineScript("Dark Singularity Engine", pinePrompt);
-      setPineScript(code);
-      addLog("[SUCCESS] Code validated against V6.0 specification.");
-    } catch (err: any) {
-      addLog(`[ERROR] Compilation failed: ${err.message}`);
-    } finally {
-      setLoading(false);
-    }
-  }, [pinePrompt, addLog]);
-
-  const handleCopyCode = useCallback(async () => {
-    if (!pineScript) return;
-    
-    try {
-      await navigator.clipboard.writeText(pineScript);
-      setCopied(true);
-      addLog("[SYSTEM] Pine V6 Source cloned to clipboard.");
-      setTimeout(() => setCopied(false), 2000);
-    } catch (err) {
-      addLog("[ERROR] Clipboard access denied.");
-    }
-  }, [pineScript, addLog]);
-
-  // Pine Script Syntax Highlighter
-  const highlightPineScript = (code: string) => {
-    if (!code) return null;
-    return code.split('\n').map((line, i) => (
-      <div key={i} className="min-h-[1.25rem]">
-        <span dangerouslySetInnerHTML={{ 
-          __html: line
-            .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
-            .replace(/(\/\/.*)/g, '<span style="color: #64748b">$1</span>')
-            .replace(/\b(indicator|strategy|input|plot|if|else|for|true|false|alert|alertcondition|runtime|request|library)\b/g, '<span style="color: #3b82f6">$1</span>')
-            .replace(/\b(ta\.[a-z_]+|ema|sma|rsi|macd|color\.[a-z_]+|math\.[a-z_]+|chart\.[a-z_]+)\b/g, '<span style="color: #fbbf24">$1</span>')
-            .replace(/\b(\d+(\.\d+)?)\b/g, '<span style="color: #10b981">$1</span>')
-            .replace(/(".*?"|'.*?')/g, '<span style="color: #94a3b8">$1</span>')
-        }} />
-      </div>
-    ));
-  };
-
-  return (
-    <div className="min-h-screen flex flex-col md:flex-row bg-slate-950 text-slate-200">
-      {/* Navigation */}
-      <nav className="w-full md:w-64 bg-slate-900 border-r border-slate-800 flex flex-col p-4 shadow-xl z-10">
-        <div className="flex items-center gap-3 mb-10 px-2 py-4 border-b border-slate-800/50">
-          <div className="bg-gradient-to-br from-indigo-500 to-purple-600 p-2.5 rounded-xl shadow-lg shadow-indigo-500/20">
-            <BrainCircuit className="text-white w-6 h-6" />
-          </div>
-          <div>
-            <h1 className="font-black text-xl tracking-tighter text-white">TRADECAST</h1>
-            <p className="text-[10px] font-bold text-indigo-400 tracking-[0.2em] uppercase opacity-80">v3.0 NEURAL</p>
-          </div>
-        </div>
-
-        <div className="space-y-1.5 flex-1">
-          {[
-            { id: 'dashboard', label: 'Signal Center', icon: <LayoutDashboard size={18} /> },
-            { id: 'reports', label: 'AI Reports Lab', icon: <BarChart3 size={18} /> },
-            { id: 'pinescript', label: 'Script Forge', icon: <Code size={18} /> },
-            { id: 'settings', label: 'Gateways', icon: <Settings size={18} /> }
-          ].map(tab => (
-            <button
-              key={tab.id}
-              onClick={() => setActiveTab(tab.id as any)}
-              className={`w-full flex items-center gap-3 px-4 py-3.5 rounded-xl transition-all font-bold text-sm
-                ${activeTab === tab.id 
-                  ? 'bg-indigo-600/10 text-indigo-400 border border-indigo-500/20 shadow-[0_0_20px_rgba(79,70,229,0.1)]' 
-                  : 'hover:bg-slate-800/50 text-slate-400'}`}
-            >
-              {tab.icon}
-              <span>{tab.label}</span>
-            </button>
-          ))}
-        </div>
-
-        <div className="mt-auto pt-6 border-t border-slate-800/50">
-          <div className="p-4 bg-slate-800 rounded-2xl border border-slate-700/50">
-            <p className="text-[9px] font-black text-slate-500 uppercase tracking-widest mb-1">Engine Latency</p>
-            <div className="flex items-center gap-2">
-              <div className="w-full h-1 bg-slate-800 rounded-full overflow-hidden">
-                <div className="w-[85%] h-full bg-emerald-500 animate-pulse"></div>
-              </div>
-              <span className="text-[9px] font-bold text-emerald-500">OPTIMAL</span>
-            </div>
-          </div>
-        </div>
-      </nav>
-
-      <main className="flex-1 flex flex-col h-screen overflow-hidden">
-        {/* Header */}
-        <header className="bg-slate-950/50 backdrop-blur-md p-6 border-b border-slate-800/80 flex items-center justify-between">
-          <div className="flex items-center gap-4">
-            <div className="h-10 w-1 bg-indigo-600 rounded-full"></div>
-            <div>
-              <h2 className="text-2xl font-black text-white tracking-tight uppercase">
-                {activeTab === 'dashboard' ? 'Signal Intelligence' : 
-                 activeTab === 'reports' ? 'Advanced Analytics' : 
-                 activeTab === 'pinescript' ? 'Source Compilation' : 'Gateway Systems'}
-              </h2>
-              <p className="text-slate-500 text-[10px] font-bold tracking-[0.3em] uppercase">Gemini 3.0 / GPT 5.2 Protocol</p>
-            </div>
-          </div>
-          <div className="flex gap-3">
-             <div className="px-4 py-2 bg-slate-900 border border-slate-800 rounded-xl flex items-center gap-2">
-                <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse-ring"></div>
-                <span className="text-[10px] font-black text-slate-300 uppercase tracking-widest">Search Grounding: ON</span>
-             </div>
-          </div>
-        </header>
-
-        {/* Content */}
-        <div className="flex-1 overflow-y-auto p-6 lg:p-10 custom-scrollbar">
-          <div className="max-w-7xl mx-auto space-y-10">
+    try:
+        url = f"https://api.telegram.org/bot{Config.TELEGRAM_BOT_TOKEN}/sendMessage"
+        payload = {
+            "chat_id": Config.TELEGRAM_CHAT_ID,
+            "text": message,
+            "parse_mode": parse_mode
+        }
+        response = requests.post(url, json=payload, timeout=10)
+        
+        if response.status_code == 200:
+            add_log("[SUCCESS] Broadcast delivered via Secure Telegram Gateway")
+            return True
+        else:
+            add_log(f"[ERROR] Telegram API: {response.text}")
+            return False
             
-            {/* Dashboard Tab */}
-            {activeTab === 'dashboard' && (
-              <div className="grid grid-cols-1 lg:grid-cols-12 gap-10">
-                <div className="lg:col-span-8 space-y-10">
-                  <MarketChart symbol={signal.symbol} timeframe={signal.timeframe} />
-                  
-                  <div className="bg-slate-900 rounded-[2.5rem] border border-slate-800 p-8 shadow-2xl relative overflow-hidden">
-                    {/* Enhanced Error Display */}
-                    {errors.length > 0 && (
-                      <div className="mb-8 p-6 bg-rose-950/30 border-2 border-rose-500/40 rounded-[2rem] animate-in">
-                        <div className="flex items-center gap-3 mb-4 text-rose-400">
-                          <ShieldAlert size={22} strokeWidth={3} className="animate-pulse" />
-                          <h4 className="font-black text-xs uppercase tracking-[0.2em]">Protocol Validation Breach</h4>
-                        </div>
-                        <ul className="space-y-3">
-                          {errors.map((err, idx) => (
-                            <li key={idx} className="flex items-start gap-3 text-[11px] text-rose-200/80 font-bold">
-                              <span className="mt-1.5 w-1.5 h-1.5 rounded-full bg-rose-500 shrink-0"></span>
-                              {err}
-                            </li>
-                          ))}
-                        </ul>
-                      </div>
-                    )}
+    except Exception as e:
+        add_log(f"[ERROR] Protocol Error: {str(e)}")
+        return False
 
-                    {/* Signal Form */}
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-10">
-                      <div className="space-y-8">
-                        <div>
-                          <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-3 block">Market Pair</label>
-                          <input 
-                            type="text" 
-                            value={signal.symbol} 
-                            onChange={(e) => setSignal({...signal, symbol: e.target.value})}
-                            className="w-full bg-slate-950 border border-slate-800 rounded-2xl px-5 py-4 text-white focus:ring-2 focus:ring-indigo-600 outline-none font-bold"
-                            placeholder="e.g., BTC/USDT"
-                          />
-                        </div>
-                        
-                        <div className="grid grid-cols-2 gap-6">
-                          <div>
-                            <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-3 block">Position</label>
-                            <div className="flex p-1.5 bg-slate-950 rounded-2xl border border-slate-800">
-                              <button 
-                                onClick={() => setSignal({...signal, direction: SignalDirection.BUY})}
-                                className={`flex-1 py-3 rounded-xl font-black text-xs transition-all
-                                  ${signal.direction === SignalDirection.BUY 
-                                    ? 'bg-emerald-600 text-white shadow-lg' 
-                                    : 'text-slate-600 hover:text-slate-300'}`}
-                              >
-                                BUY
-                              </button>
-                              <button 
-                                onClick={() => setSignal({...signal, direction: SignalDirection.SELL})}
-                                className={`flex-1 py-3 rounded-xl font-black text-xs transition-all
-                                  ${signal.direction === SignalDirection.SELL 
-                                    ? 'bg-rose-600 text-white shadow-lg' 
-                                    : 'text-slate-600 hover:text-slate-300'}`}
-                              >
-                                SELL
-                              </button>
-                            </div>
-                          </div>
-                          
-                          <div>
-                            <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-3 block">Interval</label>
-                            <select 
-                              value={signal.timeframe} 
-                              onChange={(e) => setSignal({...signal, timeframe: e.target.value})}
-                              className="w-full bg-slate-950 border border-slate-800 rounded-2xl px-5 py-4 text-white outline-none font-bold"
-                            >
-                              {['1M', '5M', '15M', '1H', '4H', '1D', '1W'].map(tf => (
-                                <option key={tf} value={tf}>{tf}</option>
-                              ))}
-                            </select>
-                          </div>
-                        </div>
+def format_signal_message(signal: Dict[str, Any]) -> str:
+    emoji = "🟢" if signal["direction"] == SignalDirection.BUY.value else "🔴"
+    return f"""🚀 <b>SIGNAL: {signal['symbol']} 🚀</b>
 
-                        <div className="grid grid-cols-2 gap-6">
-                          <div>
-                            <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-3 block">Entry Target</label>
-                            <input 
-                              type="number" 
-                              value={signal.entry}
-                              onChange={(e) => setSignal({...signal, entry: Number(e.target.value)})}
-                              className="w-full bg-slate-950 border border-slate-800 rounded-2xl px-5 py-4 text-white outline-none font-mono font-bold"
-                            />
-                          </div>
-                          <div>
-                            <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-3 block">Stop Loss</label>
-                            <input 
-                              type="number" 
-                              value={signal.sl}
-                              onChange={(e) => setSignal({...signal, sl: Number(e.target.value)})}
-                              className="w-full bg-slate-950 border border-slate-800 rounded-2xl px-5 py-4 text-rose-500 outline-none font-mono font-bold"
-                            />
-                          </div>
-                        </div>
-                      </div>
+📊 <b>Direction:</b> {emoji} {signal['direction']}
+⏱ <b>Timeframe:</b> {signal['timeframe']}
 
-                      <div className="space-y-8">
-                        <div className="grid grid-cols-3 gap-4">
-                          <div>
-                            <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-3 block">TP 1</label>
-                            <input 
-                              type="number" 
-                              value={signal.tp1}
-                              onChange={(e) => setSignal({...signal, tp1: Number(e.target.value)})}
-                              className="w-full bg-slate-950 border border-slate-800 rounded-2xl px-4 py-4 text-emerald-500 outline-none font-mono font-bold text-xs"
-                            />
-                          </div>
-                          <div>
-                            <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-3 block">TP 2</label>
-                            <input 
-                              type="number" 
-                              value={signal.tp2}
-                              onChange={(e) => setSignal({...signal, tp2: Number(e.target.value)})}
-                              className="w-full bg-slate-950 border border-slate-800 rounded-2xl px-4 py-4 text-emerald-400 outline-none font-mono font-bold text-xs"
-                            />
-                          </div>
-                          <div>
-                            <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-3 block">TP 3</label>
-                            <input 
-                              type="number" 
-                              value={signal.tp3}
-                              onChange={(e) => setSignal({...signal, tp3: Number(e.target.value)})}
-                              className="w-full bg-slate-950 border border-slate-800 rounded-2xl px-4 py-4 text-emerald-300 outline-none font-mono font-bold text-xs"
-                            />
-                          </div>
-                        </div>
+📍 <b>Entry:</b> <code>{signal['entry']}</code>
+🎯 <b>TP1:</b> <code>{signal['tp1']}</code>
+🎯 <b>TP2:</b> <code>{signal['tp2']}</code>
+🎯 <b>TP3:</b> <code>{signal['tp3']}</code>
+🛑 <b>SL:</b> <code>{signal['sl']}</code>
 
-                        <div>
-                          <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-3 block">Reasoning Basis</label>
-                          <textarea 
-                            value={signal.strategy}
-                            onChange={(e) => setSignal({...signal, strategy: e.target.value})}
-                            rows={4}
-                            className="w-full bg-slate-950 border border-slate-800 rounded-2xl px-5 py-4 text-white outline-none font-medium italic resize-none text-sm"
-                            placeholder="Enter technical analysis rationale..."
-                          />
-                        </div>
-                      </div>
-                    </div>
+💡 <b>Strategy:</b> {signal['strategy']}
 
-                    <button 
-                      onClick={handleBroadcastSignal}
-                      disabled={loading}
-                      className="w-full mt-12 bg-gradient-to-r from-indigo-600 to-purple-700 hover:from-indigo-500 hover:to-purple-600 
-                                py-5 rounded-[2rem] font-black text-lg tracking-widest flex items-center justify-center gap-4 
-                                transition-all shadow-xl disabled:opacity-50 disabled:cursor-not-allowed group"
-                    >
-                      {loading ? (
-                        <Loader2 className="animate-spin" />
-                      ) : (
-                        <Send size={22} className="-rotate-45 group-hover:translate-x-1 group-hover:-translate-y-1 transition-transform" />
-                      )}
-                      {loading ? 'TRANSMITTING NEURAL PACKET...' : 'DEPLOY ENCRYPTED BROADCAST'}
-                    </button>
-                  </div>
-                </div>
+⚡ <b>Timestamp:</b> {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"""
 
-                {/* Preview Panel */}
-                <div className="lg:col-span-4 space-y-10">
-                  <div className="bg-slate-900 rounded-[3rem] border border-slate-800 overflow-hidden shadow-2xl p-8 relative">
-                    <div className="flex items-center gap-3 mb-6 pb-4 border-b border-slate-800/50">
-                      <BrainCircuit size={20} className="text-indigo-500" />
-                      <span className="text-[10px] font-black text-white uppercase tracking-widest">LIVE PREVIEW</span>
-                    </div>
-                    
-                    <div className="w-full bg-slate-950 p-8 rounded-[2.5rem] border border-slate-800 relative overflow-hidden shadow-inner">
-                      <div className={`absolute top-0 left-0 w-2 h-full ${signal.direction === SignalDirection.BUY ? 'bg-emerald-500' : 'bg-rose-500'}`}></div>
-                      
-                      <p className="text-[14px] font-black text-white mb-6 uppercase tracking-tight">
-                        {signalPreview.header}
-                      </p>
-                      
-                      <div className="space-y-4 font-mono text-[11px] font-bold">
-                        <p className="text-slate-500 uppercase">
-                          DIRECTION: <span className={signalPreview.directionColor}>{signalPreview.directionText}</span>
-                        </p>
-                        <p className="text-slate-500 uppercase">TF: {signal.timeframe}</p>
-                        
-                        <div className="h-[1px] bg-slate-800/50 my-6"></div>
-                        
-                        <div className="space-y-3">
-                          <p className="text-white/90">📍 ENTRY: {signal.entry}</p>
-                          <p className="text-emerald-500">🎯 TP1: {signal.tp1}</p>
-                          <p className="text-emerald-400">🎯 TP2: {signal.tp2}</p>
-                          <p className="text-emerald-300">🎯 TP3: {signal.tp3}</p>
-                          <p className="text-rose-500">🛑 SL: {signal.sl}</p>
-                        </div>
-                        
-                        <p className="text-indigo-400 text-[10px] leading-relaxed italic border-t border-slate-800/50 mt-6 pt-6 line-clamp-4">
-                          {signal.strategy}
-                        </p>
-                      </div>
-                    </div>
-                    
-                    <div className="mt-8 flex items-center justify-between px-2">
-                      <span className="text-[9px] font-black text-slate-500 uppercase tracking-widest">Logic Status:</span>
-                      <span className={`text-[9px] font-black px-3 py-1 rounded-full border ${signalPreview.logicStatusColor}`}>
-                        {signalPreview.logicStatus}
-                      </span>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            )}
+def format_report_message(report: Dict[str, Any]) -> str:
+    return f"""📊 <b>{report['title']}</b>
 
-            {/* Reports Tab */}
-            {activeTab === 'reports' && (
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-10">
-                <div className="bg-slate-900 rounded-[2.5rem] border border-slate-800 p-10 shadow-2xl">
-                  <div className="flex items-center gap-4 mb-10">
-                    <BarChart3 className="text-indigo-500" size={24} />
-                    <div>
-                      <h3 className="text-2xl font-black text-white uppercase">NEURAL ANALYTICS</h3>
-                      <p className="text-slate-500 text-[10px] font-bold uppercase">Gemini 3.0 Deep Synthesis</p>
-                    </div>
-                  </div>
-                  
-                  <div className="space-y-8">
-                    <div>
-                      <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-4 block">Reasoning Depth</label>
-                      <div className="grid grid-cols-3 gap-3 p-1.5 bg-slate-950 rounded-2xl border border-slate-800">
-                        {[
-                          { key: AnalysisDepth.QUICK, icon: <Search size={14} />, label: 'QUICK' },
-                          { key: AnalysisDepth.DETAILED, icon: <Activity size={14} />, label: 'DEEP' },
-                          { key: AnalysisDepth.QUANT, icon: <Layers size={14} />, label: 'QUANT' }
-                        ].map(({key, icon, label}) => (
-                          <button
-                            key={key}
-                            onClick={() => setReportDepth(key)}
-                            className={`py-3 rounded-xl font-black text-[10px] tracking-widest flex items-center justify-center gap-2 transition-all
-                              ${reportDepth === key ? 'bg-indigo-600 text-white shadow-lg' : 'text-slate-500 hover:text-slate-300'}`}
-                          >
-                            {icon} {label}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
+🎯 <b>Market Outlook:</b> {report['outlook']}
 
-                    <textarea 
-                      value={analysisContext}
-                      onChange={(e) => setAnalysisContext(e.target.value)}
-                      placeholder="Enter market vectors, price action observations, or technical indicators for deep synthesis..."
-                      className="w-full h-80 bg-slate-950 border border-slate-800 rounded-3xl px-6 py-6 text-white outline-none focus:ring-2 focus:ring-indigo-600 resize-none font-medium text-sm"
-                    />
-                    
-                    <button 
-                      onClick={handleGenerateReport}
-                      disabled={loading || !analysisContext}
-                      className="w-full bg-indigo-600 hover:bg-indigo-500 py-5 rounded-[1.5rem] font-black text-lg tracking-widest flex items-center justify-center gap-4 shadow-xl disabled:opacity-50"
-                    >
-                      {loading ? <Loader2 className="animate-spin" /> : <Zap size={20} />}
-                      {loading ? 'SYNTHESIZING VECTORS...' : `INITIALIZE ${reportDepth} ANALYSIS`}
-                    </button>
-                  </div>
-                </div>
+📝 <b>Summary:</b> {report['summary']}
 
-                {/* Report Output */}
-                <div className="bg-slate-900 rounded-[2.5rem] border border-slate-800 p-10 flex flex-col min-h-[600px] shadow-2xl">
-                  {currentReport ? (
-                    <div className="flex-1 flex flex-col space-y-8 animate-in overflow-hidden">
-                      <div className="flex items-center justify-between">
-                        <h4 className="text-2xl font-black text-white uppercase underline decoration-indigo-500 decoration-4 underline-offset-8">
-                          {currentReport.title}
-                        </h4>
-                        <div className={`px-4 py-1.5 rounded-full text-[10px] font-black border-2 ${
-                          currentReport.outlook === 'BULLISH' 
-                            ? 'bg-emerald-500/10 text-emerald-500 border-emerald-500/20' 
-                            : currentReport.outlook === 'BEARISH'
-                            ? 'bg-rose-500/10 text-rose-500 border-rose-500/20'
-                            : 'bg-slate-500/10 text-slate-400 border-slate-500/20'
-                        }`}>
-                          {currentReport.outlook}
-                        </div>
-                      </div>
+📈 <b>Technical Analysis:</b> {report['technicalDetails']}
 
-                      <div className="p-8 bg-slate-950 rounded-3xl border border-slate-800 shadow-inner">
-                        <p className="text-[10px] font-black text-indigo-400 mb-4 uppercase tracking-widest">AI EXECUTIVE SUMMARY</p>
-                        <p className="text-slate-200 leading-relaxed font-bold italic">"{currentReport.summary}"</p>
-                      </div>
+🔗 <b>Sources:</b> {len(report.get('sources', []))} references"""
 
-                      <div className="flex-1 overflow-y-auto custom-scrollbar space-y-8">
-                        <div className="text-slate-400 text-sm leading-relaxed whitespace-pre-line bg-slate-950/50 p-8 rounded-3xl border border-slate-800/50">
-                          {currentReport.technicalDetails}
-                        </div>
-                        
-                        {currentReport.sources && currentReport.sources.length > 0 && (
-                          <div className="space-y-4">
-                            <h5 className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Grounding Sources</h5>
-                            <div className="grid grid-cols-1 gap-2">
-                              {currentReport.sources.map((source, idx) => (
-                                <a 
-                                  key={idx}
-                                  href={source.uri}
-                                  target="_blank"
-                                  rel="noopener noreferrer"
-                                  className="flex items-center gap-3 p-4 bg-indigo-500/5 border border-indigo-500/10 rounded-2xl hover:bg-indigo-500/10 transition-colors group"
-                                >
-                                  <ExternalLink size={14} className="text-indigo-400 group-hover:text-indigo-300" />
-                                  <span className="text-xs font-bold text-slate-400 group-hover:text-slate-200 truncate flex-1">
-                                    {source.title}
-                                  </span>
-                                </a>
-                              ))}
-                            </div>
-                          </div>
-                        )}
-                      </div>
+# ──────────────────────────────────────────────────────────────
+# UI COMPONENTS
+# ──────────────────────────────────────────────────────────────
+def render_chart():
+    # Mock chart - replace with real data from Binance API
+    fig = go.Figure()
+    fig.add_trace(go.Candlestick(
+        x=['00:00', '01:00', '02:00', '03:00', '04:00'],
+        open=[64000, 64200, 64100, 64300, 64400],
+        high=[64200, 64300, 64200, 64500, 64600],
+        low=[63900, 64000, 64000, 64100, 64300],
+        close=[64100, 64250, 64150, 64400, 64500],
+        name="BTC/USDT"
+    ))
+    fig.update_layout(
+        template="plotly_dark",
+        plot_bgcolor="#020617",
+        paper_bgcolor="#0f172a",
+        font=dict(color="#94a3b8", size=10),
+        margin=dict(l=20, r=20, t=20, b=20)
+    )
+    st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
 
-                      <button 
-                        onClick={handleBroadcastReport}
-                        className="w-full bg-indigo-600 hover:bg-indigo-500 py-5 rounded-[1.5rem] font-black text-lg tracking-widest flex items-center justify-center gap-4 transition-all"
-                      >
-                        <Send size={22} className="-rotate-45" /> TRANSMIT INTELLIGENCE
-                      </button>
-                    </div>
-                  ) : (
-                    <div className="flex-1 flex flex-col items-center justify-center opacity-40">
-                      <FileText size={64} className="mb-6" />
-                      <p className="text-xl font-black text-slate-400 uppercase">Engine Standby</p>
-                      <p className="text-[10px] text-slate-600 mt-2">Generate a report to see results here</p>
-                    </div>
-                  )}
-                </div>
-              </div>
-            )}
+def render_logs():
+    with st.sidebar:
+        st.markdown("### 🖥️ NEURAL TERMINAL")
+        log_container = st.container()
+        with log_container:
+            for log in st.session_state.logs[-20:]:  # Show last 20 logs
+                st.code(log, language=None)
 
-            {/* Pine Script Tab */}
-            {activeTab === 'pinescript' && (
-              <div className="space-y-10">
-                <div className="bg-slate-900 rounded-[2.5rem] border border-slate-800 p-10 shadow-2xl">
-                  <div className="flex items-center gap-4">
-                    <Code className="text-emerald-500" size={24} />
-                    <div>
-                      <h3 className="text-2xl font-black text-white uppercase">PINE FORGE 6.0</h3>
-                      <p className="text-slate-500 text-[10px] font-bold uppercase">TradingView v6.0 Standard</p>
-                    </div>
-                  </div>
-                  
-                  <div className="flex gap-6 mt-10">
-                    <input 
-                      value={pinePrompt}
-                      onChange={(e) => setPinePrompt(e.target.value)}
-                      placeholder="Describe trading logic (e.g., RSI Divergence + Volume Profile with EMA crossover)..."
-                      className="flex-1 bg-slate-950 border border-slate-800 rounded-[1.5rem] px-8 py-5 text-white outline-none font-medium focus:ring-2 focus:ring-emerald-600"
-                    />
-                    <button 
-                      onClick={handleGeneratePine}
-                      disabled={loading || !pinePrompt}
-                      className="bg-emerald-600 hover:bg-emerald-500 px-10 rounded-[1.5rem] font-black text-sm uppercase shadow-xl disabled:opacity-50 transition-all"
-                    >
-                      {loading ? <Loader2 className="animate-spin" /> : 'FORGE V6 SOURCE'}
-                    </button>
-                  </div>
-                </div>
+# ──────────────────────────────────────────────────────────────
+# MAIN APP
+# ──────────────────────────────────────────────────────────────
+def main():
+    # Page Configuration
+    st.set_page_config(
+        page_title="TRADECAST v3.0 NEURAL",
+        page_icon="🧠",
+        layout="wide",
+        initial_sidebar_state="expanded"
+    )
+    
+    # Custom CSS
+    st.markdown("""
+        <style>
+        .stButton>button {
+            font-weight: 800;
+            letter-spacing: 0.1em;
+            text-transform: uppercase;
+        }
+        .block-container {
+            padding-top: 2rem;
+        }
+        </style>
+    """, unsafe_allow_html=True)
+    
+    init_session_state()
+    
+    # Sidebar Navigation
+    with st.sidebar:
+        st.title("🧠 TRADECAST")
+        st.markdown("### v3.0 NEURAL")
+        
+        tab = st.radio(
+            "Navigation",
+            ["📊 Signal Center", "📈 AI Reports Lab", "⚡ Script Forge", "🔐 Gateways"],
+            label_visibility="collapsed"
+        )
+        
+        # API Status Indicators
+        st.markdown("---")
+        st.markdown("**API Status**")
+        if Config.GEMINI_API_KEY:
+            st.success("✅ Gemini Active")
+        else:
+            st.error("❌ Gemini Inactive")
+        
+        if Config.TELEGRAM_BOT_TOKEN:
+            st.success("✅ Telegram Active")
+        else:
+            st.error("❌ Telegram Inactive")
+    
+    # Main Content
+    if tab == "📊 Signal Center":
+        render_signal_center()
+    elif tab == "📈 AI Reports Lab":
+        render_reports_lab()
+    elif tab == "⚡ Script Forge":
+        render_script_forge()
+    elif tab == "🔐 Gateways":
+        render_gateways()
+    
+    # Always render terminal at bottom
+    render_logs()
 
-                {pineScript && (
-                  <div className="bg-slate-950 rounded-[2.5rem] border border-slate-800 overflow-hidden shadow-2xl animate-in">
-                    <div className="bg-slate-900/80 px-10 py-5 border-b border-slate-800 flex justify-between items-center">
-                      <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest">V6.0 ALPHA CORE</span>
-                      <button 
-                        onClick={handleCopyCode}
-                        className="text-[10px] font-black text-emerald-500 flex items-center gap-2 group px-5 py-2 rounded-xl border border-emerald-500/20 bg-emerald-500/5 hover:bg-emerald-500/10 transition-all"
-                      >
-                        {copied ? <Check size={14} /> : <Copy size={14} />}
-                        {copied ? 'CLONED' : 'CLONE SOURCE'}
-                      </button>
-                    </div>
-                    <div className="p-10 font-mono text-sm overflow-x-auto leading-relaxed max-h-[750px] custom-scrollbar bg-slate-950">
-                      {highlightPineScript(pineScript)}
-                    </div>
-                  </div>
-                )}
-              </div>
-            )}
+def render_signal_center():
+    st.header("📡 SIGNAL ARCHITECT")
+    
+    # Error Display
+    if st.session_state.errors:
+        st.error("### 🔴 PROTOCOL VALIDATION BREACH")
+        for error in st.session_state.errors:
+            st.markdown(f"- {error}")
+    
+    col1, col2 = st.columns([2, 1])
+    
+    with col1:
+        with st.form("signal_form"):
+            col_left, col_right = st.columns(2)
+            
+            with col_left:
+                symbol = st.text_input("Market Pair", value=st.session_state.signal["symbol"])
+                direction = st.radio("Position", ["BUY", "SELL"], 
+                                   index=0 if st.session_state.signal["direction"] == "BUY" else 1)
+                entry = st.number_input("Entry Target", value=float(st.session_state.signal["entry"]), 
+                                      format="%.2f")
+                sl = st.number_input("Stop Loss", value=float(st.session_state.signal["sl"]), 
+                                   format="%.2f")
+            
+            with col_right:
+                timeframe = st.selectbox("Interval", ["1M", "5M", "15M", "1H", "4H", "1D", "1W"],
+                                       index=["1M", "5M", "15M", "1H", "4H", "1D", "1W"].index(st.session_state.signal["timeframe"]))
+                tp1 = st.number_input("TP 1", value=float(st.session_state.signal["tp1"]), format="%.2f")
+                tp2 = st.number_input("TP 2", value=float(st.session_state.signal["tp2"]), format="%.2f")
+                tp3 = st.number_input("TP 3", value=float(st.session_state.signal["tp3"]), format="%.2f")
+            
+            strategy = st.text_area("Reasoning Basis", value=st.session_state.signal["strategy"])
+            
+            submitted = st.form_submit_button("🚀 DEPLOY ENCRYPTED BROADCAST", 
+                                            type="primary", use_container_width=True)
+            
+            if submitted:
+                # Update signal
+                st.session_state.signal.update({
+                    "symbol": symbol, "direction": direction, "entry": entry,
+                    "sl": sl, "timeframe": timeframe, "tp1": tp1, "tp2": tp2,
+                    "tp3": tp3, "strategy": strategy
+                })
+                
+                # Validate
+                errors = validate_signal(st.session_state.signal)
+                st.session_state.errors = errors
+                
+                if not errors:
+                    # Send to Telegram
+                    message = format_signal_message(st.session_state.signal)
+                    if send_to_telegram(message):
+                        st.success("✅ Signal broadcast successfully!")
+                        # Generate AI intelligence if configured
+                        if st.checkbox("Enhance with Gemini AI Intelligence"):
+                            report = generate_technical_report(
+                                symbol, timeframe, strategy, AnalysisDepth.QUICK
+                            )
+                            if report:
+                                enhanced_message = f"{message}\n\n🤖 AI INTEL: {report['summary']}"
+                                send_to_telegram(enhanced_message)
+                                st.info("AI enhancement added to broadcast")
+        st.markdown("---")
+        render_chart()
 
-            {/* Settings Tab */}
-            {activeTab === 'settings' && (
-              <div className="max-w-3xl mx-auto space-y-10">
-                <div className="bg-slate-900 rounded-[3rem] border border-slate-800 p-12 shadow-2xl">
-                  <div className="flex items-center gap-6 mb-12">
-                    <Settings className="text-white" size={32} />
-                    <h3 className="text-3xl font-black text-white uppercase">SYSTEM GATEWAYS</h3>
-                  </div>
+def render_reports_lab():
+    st.header("🧪 NEURAL ANALYTICS LAB")
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        depth = st.radio("Reasoning Depth", 
+                        ["QUICK", "DETAILED", "QUANT"],
+                        format_func=lambda x: f"{x} Analysis")
+        context = st.text_area("Analysis Context", 
+                              placeholder="Provide market vectors for deep synthesis...",
+                              height=300)
+        
+        if st.button("🔬 INITIALIZE ANALYSIS", type="primary", use_container_width=True):
+            if not context:
+                st.warning("Please provide analysis context")
+                return
+            
+            with st.spinner("Synthesizing neural vectors..."):
+                report = generate_technical_report(
+                    st.session_state.signal["symbol"],
+                    st.session_state.signal["timeframe"],
+                    context,
+                    AnalysisDepth[depth]
+                )
+                
+                if report:
+                    st.session_state.current_report = report
+                    st.success("Analysis complete!")
+    
+    with col2:
+        if st.session_state.current_report:
+            report = st.session_state.current_report
+            st.markdown(f"### {report['title']}")
+            
+            outlook_color = {
+                "BULLISH": "🟢",
+                "BEARISH": "🔴",
+                "NEUTRAL": "⚪"
+            }.get(report['outlook'], "⚪")
+            
+            st.markdown(f"**Market Outlook:** {outlook_color} {report['outlook']}")
+            st.info(f"**Summary:** {report['summary']}")
+            
+            with st.expander("📊 Technical Details", expanded=True):
+                st.markdown(report['technicalDetails'])
+            
+            if report.get('sources'):
+                st.markdown("**Sources:**")
+                for source in report['sources']:
+                    st.markdown(f"- [{source['title']}]({source['uri']})")
+            
+            if st.button("📡 TRANSMIT INTELLIGENCE", use_container_width=True):
+                message = format_report_message(report)
+                if send_to_telegram(message):
+                    st.success("Report transmitted!")
+        else:
+            st.info("Generate a report to see results here")
 
-                  <div className="space-y-10">
-                    <div>
-                      <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-4 block">Telegram Bot Token</label>
-                      <input 
-                        type="password"
-                        value={ENV_CONFIG.botToken || ''}
-                        disabled
-                        className="w-full bg-slate-950 border border-slate-800 rounded-2xl px-6 py-5 text-white font-mono text-sm outline-none"
-                        placeholder="Loaded from .env"
-                      />
-                      <p className="text-[9px] text-slate-600 mt-2">Configure in .env file (VITE_TELEGRAM_BOT_TOKEN)</p>
-                    </div>
-                    
-                    <div>
-                      <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-4 block">Destination Chat ID</label>
-                      <input 
-                        type="text"
-                        value={ENV_CONFIG.chatId || ''}
-                        disabled
-                        className="w-full bg-slate-950 border border-slate-800 rounded-2xl px-6 py-5 text-white font-mono text-sm outline-none"
-                        placeholder="Loaded from .env"
-                      />
-                      <p className="text-[9px] text-slate-600 mt-2">Configure in .env file (VITE_TELEGRAM_CHAT_ID)</p>
-                    </div>
+def render_script_forge():
+    st.header("⚡ PINE FORGE 6.0")
+    
+    prompt = st.text_input("Trading Logic Description",
+                          placeholder="e.g., RSI Divergence + Volume Profile with EMA crossover")
+    
+    if st.button("🔨 FORGE V6 SOURCE", type="primary", use_container_width=True):
+        if not prompt:
+            st.warning("Please describe your trading logic")
+            return
+        
+        with st.spinner("Compiling to Pine Script v6.0..."):
+            code = generate_pine_script("Dark Singularity Engine", prompt)
+            st.session_state.pine_script = code
+            st.success("Compilation successful!")
+    
+    if st.session_state.pine_script:
+        st.markdown("#### 📄 Generated Pine Script v6.0")
+        
+        col_copy, col_download = st.columns([1, 4])
+        with col_copy:
+            if st.button("📋 Copy", help="Copy to clipboard"):
+                st.code(st.session_state.pine_script, language=None)
+                st.success("Code copied!")
+        
+        with col_download:
+            st.download_button(
+                label="💾 Download .pine",
+                data=st.session_state.pine_script,
+                file_name="strategy.pine",
+                mime="text/plain"
+            )
+        
+        st.code(st.session_state.pine_script, language='javascript', line_numbers=True)
 
-                    <div className="p-6 bg-indigo-500/5 border border-indigo-500/20 rounded-2xl">
-                      <div className="flex items-start gap-3">
-                        <Info size={16} className="text-indigo-400 mt-0.5" />
-                        <div>
-                          <p className="text-[10px] font-bold text-indigo-400 uppercase tracking-widest">Security Notice</p>
-                          <p className="text-[11px] text-slate-400 mt-1">
-                            API credentials are now loaded securely from environment variables and are never exposed in the client bundle.
-                          </p>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            )}
-          </div>
-        </div>
+def render_gateways():
+    st.header("🔐 SYSTEM GATEWAYS")
+    st.markdown("### 🔑 API Configuration")
+    
+    st.info("API keys are now loaded securely from `.streamlit/secrets.toml`")
+    
+    with st.expander("View Current Configuration"):
+        if Config.GEMINI_API_KEY:
+            st.success(f"Gemini API Key: {Config.GEMINI_API_KEY[:8]}...{Config.GEMINI_API_KEY[-4:]}")
+        else:
+            st.error("Gemini API Key: Not configured")
+        
+        if Config.TELEGRAM_BOT_TOKEN:
+            st.success(f"Telegram Bot Token: {Config.TELEGRAM_BOT_TOKEN[:8]}...{Config.TELEGRAM_BOT_TOKEN[-4:]}")
+        else:
+            st.error("Telegram Bot Token: Not configured")
+        
+        if Config.TELEGRAM_CHAT_ID:
+            st.success(f"Telegram Chat ID: {Config.TELEGRAM_CHAT_ID}")
+        else:
+            st.error("Telegram Chat ID: Not configured")
+    
+    st.markdown("---")
+    st.markdown("""
+    ### Setup Instructions
+    
+    1. Create a file named `.streamlit/secrets.toml` in your project root
+    2. Add your API keys:
+    
+    ```toml
+    [telegram]
+    bot_token = "123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11"
+    chat_id = "-1001234567890"
+    
+    [gemini]
+    api_key = "YOUR_GEMINI_API_KEY"
+    ```
+    
+    3. Restart the Streamlit app
+    
+    4. **Security Best Practices:**
+       - Never commit secrets.toml to Git
+       - Use environment variables in production
+       - Rotate keys regularly
+    """)
 
-        {/* Terminal Footer */}
-        <footer className="h-32 bg-slate-950 border-t border-slate-800/80 p-5 font-mono text-[10px] flex flex-col z-20">
-          <div className="flex items-center justify-between mb-2 text-slate-600 font-black uppercase tracking-widest pb-2 border-b border-slate-800/30">
-            <div className="flex items-center gap-2">
-              <Terminal size={12} className="text-indigo-500" /> NEURAL OVERRIDE TERMINAL
-            </div>
-            <div className="flex gap-6">
-              <span className="text-emerald-500">QUANT CORE: ONLINE</span>
-              <span className="text-indigo-500">GPT-5 SYNTH: ACTIVE</span>
-            </div>
-          </div>
-          <div className="flex-1 overflow-y-auto space-y-1.5 custom-scrollbar">
-            {logs.map((log, i) => (
-              <div 
-                key={i}
-                className={`flex gap-3 hover:bg-slate-900/40 px-2 rounded transition-colors
-                  ${log.includes('[ERROR]') ? 'text-rose-500' : 
-                    log.includes('[SUCCESS]') ? 'text-emerald-500' : 
-                    log.includes('[AI]') ? 'text-indigo-400' : 'text-slate-500'}`}
-              >
-                <span className="opacity-20 select-none font-black">
-                  {String(i + 1).padStart(3, '0')}
-                </span>
-                <p className="tracking-tighter">{log}</p>
-              </div>
-            ))}
-            <div className="h-4" />
-          </div>
-        </footer>
-      </main>
-    </div>
-  );
-};
-
-export default App;
+# ──────────────────────────────────────────────────────────────
+# ENTRY POINT
+# ──────────────────────────────────────────────────────────────
+if __name__ == "__main__":
+    # Check for API keys on startup
+    if not Config.GEMINI_API_KEY:
+        st.error("⚠️ Gemini API key not found in secrets!")
+    
+    if not (Config.TELEGRAM_BOT_TOKEN and Config.TELEGRAM_CHAT_ID):
+        st.warning("⚠️ Telegram credentials not found - broadcasting disabled")
+    
+    main()
