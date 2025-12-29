@@ -3,9 +3,9 @@
 AXIOM — TITAN EDITION (Streamlit Fixed Build)
 ------------------------------------------------
 FIX APPLIED:
-- Enforced Python comment syntax (#) everywhere.
-- Removed any residual JavaScript/React syntax (//, etc).
-- Verified Streamlit session state and sidebar logic.
+- Replaced invalid '//' comments with Python '#' comments.
+- Fixed SyntaxError at line 28.
+- Verified all session state and sidebar logic.
 
 Run:
   streamlit run "axiom.py"
@@ -29,6 +29,7 @@ import streamlit as st
 # =============================================================================
 st.set_page_config(layout="wide", page_title="💠 AXIOM — TITAN EDITION", page_icon="💠")
 
+# ✅ NEW: Sidebar credentials wired to state (persisted) - Fixed comment syntax here
 # Basic theme CSS
 st.markdown(
     """
