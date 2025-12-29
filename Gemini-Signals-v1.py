@@ -1,6 +1,6 @@
 """
 Signals-MOBILE 
-Version 20.1: Enterprise-Grade Trading Engine + Fixed HTML Rendering
+Version 20.2: Enterprise-Grade Trading Engine + Fixed HTML Rendering + Apex Trinity Integration
 """
 
 import time
@@ -590,6 +590,46 @@ def calculate_fibonacci(df: pd.DataFrame, lookback: int = 50) -> Dict[str, float
         'low': low
     }
 
+def calculate_rma(series: pd.Series, length: int) -> pd.Series:
+    """
+    Calculate Wilder's Moving Average (RMA/SMMA)
+    Equivalent to Pine Script `ta.rma`
+    """
+    alpha = 1 / length
+    return series.ewm(alpha=alpha, adjust=False).mean()
+
+def rational_quadratic_kernel(src: pd.Series, lookback: int, weight: float, start_at: int = 0) -> pd.Series:
+    """
+    Python implementation of Pine Script's Rational Quadratic Kernel
+    Used for Nexus Trend line calculation
+    """
+    kernel_line = []
+    
+    # Generate weights once
+    weights = []
+    for i in range(lookback + start_at + 1):
+        w = math.pow(1 + (math.pow(i, 2) / (2 * weight * lookback * lookback)), -weight)
+        weights.append(w)
+    
+    # Convolve
+    for i in range(len(src)):
+        if i < lookback + start_at:
+            kernel_line.append(np.nan)
+            continue
+            
+        current_weight = 0.0
+        cumulative_weight = 0.0
+        
+        for j in range(lookback + start_at + 1):
+            y = src.iloc[i - j]
+            w = weights[j]
+            current_weight += y * w
+            cumulative_weight += w
+            
+        kernel_line.append(current_weight / cumulative_weight if cumulative_weight != 0 else np.nan)
+        
+    return pd.Series(kernel_line, index=src.index)
+
 # =============================================================================
 # DATABASE LAYER
 # =============================================================================
@@ -868,8 +908,9 @@ def generate_mobile_report(row, symbol, tf, fibs, fg_index, smart_stop,
     is_bull = bool(row['is_bull'])
     direction = "LONG 🐂" if is_bull else "SHORT 🐻"
     
-    # Calculate signal score
+    # Calculate signal score (Integrated with Nexus)
     titan_sig = 1 if is_bull else -1
+    nexus_sig = 1 if row['n2_signal'] == 1 else (-1 if row['n2_signal'] == -1 else 0)
     apex_sig = int(row['apex_trend'])
     gann_sig = int(row['gann_trend']) if not pd.isna(row['gann_trend']) else 0
     momentum_sig = 1 if row['money_flow'] > 0 else -1
@@ -880,14 +921,15 @@ def generate_mobile_report(row, symbol, tf, fibs, fg_index, smart_stop,
     if titan_sig == gann_sig: score_val += 1
     if titan_sig == momentum_sig: score_val += 1
     if volume_sig == 1: score_val += 1
+    if nexus_sig == titan_sig: score_val += 1 # Bonus for Nexus confirmation
 
     # Confidence text
-    if score_val >= 3: 
-        confidence = "MAX 🔥🔥🔥"
+    if score_val >= 4: 
+        confidence = "GOD MODE 🔥🔥🔥"
+    elif score_val >= 3: 
+        confidence = "MAX 🔥"
     elif score_val >= 2: 
-        confidence = "HIGH 🔥"
-    elif score_val >= 1: 
-        confidence = "MEDIUM ⚡"
+        confidence = "HIGH ⚡"
     else: 
         confidence = "LOW ⚠️"
 
@@ -900,6 +942,7 @@ def generate_mobile_report(row, symbol, tf, fibs, fg_index, smart_stop,
         vol_desc = "Normal"
 
     squeeze_txt = "⚠️ SQUEEZE ACTIVE" if row['in_squeeze'] else "✅ NO SQUEEZE"
+    nexus_txt = "✅ NEXUS CONFIRMED" if nexus_sig == titan_sig else "⚠️ NEXUS DIVERGENCE"
 
     # Format all numeric values
     entry_price = float(row['close'])
@@ -917,7 +960,8 @@ def generate_mobile_report(row, symbol, tf, fibs, fg_index, smart_stop,
 <div class="report-card">
     <div class="report-header">💠 SIGNAL: {direction}</div>
     <div class="report-item">Confidence: <span class="highlight">{confidence}</span></div>
-    <div class="report-item">Layers: <span class="highlight">{score_val}/4 Confirmed</span></div>
+    <div class="report-item">Layers: <span class="highlight">{score_val}/5 Confirmed</span></div>
+    <div class="report-item">Nexus: <span class="highlight">{nexus_txt}</span></div>
     <div class="report-item">Squeeze: <span class="highlight">{squeeze_txt}</span></div>
     <div class="report-item">AI Score: <span class="highlight">{ai_analysis["signal_confidence"]}/100</span></div>
 </div>
@@ -926,8 +970,9 @@ def generate_mobile_report(row, symbol, tf, fibs, fg_index, smart_stop,
     # Flow & Vol card
     html_parts.append(f'''
 <div class="report-card">
-    <div class="report-header">🌊 FLOW & VOL</div>
+    <div class="report-header">🌊 FLOW & VOL (Vector)</div>
     <div class="report-item">RVOL: <span class="highlight">{row["rvol"]:.2f} ({vol_desc})</span></div>
+    <div class="report-item">Flux: <span class="highlight">{row["v3_flux"]:.2f} ({row["v3_state"]})</span></div>
     <div class="report-item">Money Flow: <span class="highlight">{row["money_flow"]:.2f}</span></div>
     <div class="report-item">VWAP: <span class="highlight">{'Above' if entry_price > float(row['vwap']) else 'Below'}</span></div>
 </div>
@@ -1065,7 +1110,7 @@ def run_engines(df, amp, dev, hma_l, tp1, tp2, tp3, mf_l, vol_l, gann_l, use_ml_
     ds_abs_pc = abs(pc).ewm(span=25).mean().ewm(span=13).mean()
     df['hyper_wave'] = (100 * (ds_pc / ds_abs_pc)) / 2
 
-    # Titan Trend
+    # Titan Trend (Section 1 of Trinity: Apex Trend)
     df['ll'] = df['low'].rolling(amp).min()
     df['hh'] = df['high'].rolling(amp).max()
     trend = np.zeros(len(df))
@@ -1093,9 +1138,119 @@ def run_engines(df, amp, dev, hma_l, tp1, tp2, tp3, mf_l, vol_l, gann_l, use_ml_
     df['is_bull'] = trend == 0
     df['entry_stop'] = stop
 
-    # Enhanced Signals with Volume Filter
+    # -------------------------------------------------------------------------
+    # SECTION 2: NEXUS (Kernel, Gann, Risk)
+    # -------------------------------------------------------------------------
+    # Kernel Trend (Rational Quadratic)
+    # Lookback 50, Weight 8.0
+    df['n2_kernel'] = rational_quadratic_kernel(df['close'], 50, 8.0)
+    df['n2_kernel_trend'] = np.where(df['n2_kernel'] > df['n2_kernel'].shift(1), 1, -1)
+
+    # Gann High/Low Activator
+    # Length 20
+    df['n2_donchian_high'] = df['high'].rolling(20).max()
+    df['n2_donchian_low'] = df['low'].rolling(20).min()
+    n2_gann_trend = np.zeros(len(df))
+    n2_gann_act = np.full(len(df), np.nan)
+    curr_g_t = 1
+    curr_g_a = df.at[0, 'low']
+    
+    for i in range(1, len(df)):
+        c = df.at[i, 'close']
+        dh = df.at[i, 'n2_donchian_high']
+        dl = df.at[i, 'n2_donchian_low']
+        
+        if curr_g_t == 1:
+            if c < curr_g_a:
+                curr_g_t = -1
+                curr_g_a = dh
+            else:
+                curr_g_a = dl
+        else:
+            if c > curr_g_a:
+                curr_g_t = 1
+                curr_g_a = dl
+            else:
+                curr_g_a = dh
+        n2_gann_trend[i] = curr_g_t
+        n2_gann_act[i] = curr_g_a
+    
+    df['n2_gann_trend'] = n2_gann_trend
+    
+    # UT Bot Risk Line (ATR Trailing Stop)
+    # Factor 4.0, Period 14
+    n2_atr = df['atr'] # using standard ATR 14 from above
+    n2_nLoss = 4.0 * n2_atr
+    n2_stop = np.zeros(len(df))
+    n2_pos = np.zeros(len(df))
+    
+    for i in range(1, len(df)):
+        c = df.at[i, 'close']
+        prev_c = df.at[i-1, 'close']
+        prev_stop = n2_stop[i-1]
+        loss = n2_nLoss[i]
+        
+        if c > prev_stop and prev_c > prev_stop:
+            curr_stop = max(prev_stop, c - loss)
+        elif c < prev_stop and prev_c < prev_stop:
+            curr_stop = min(prev_stop, c + loss)
+        elif c > prev_stop:
+            curr_stop = c - loss
+        else:
+            curr_stop = c + loss
+            
+        n2_stop[i] = curr_stop
+        
+        # Position logic
+        if prev_c < prev_stop and c > prev_stop:
+            n2_pos[i] = 1
+        elif prev_c > prev_stop and c < prev_stop:
+            n2_pos[i] = -1
+        else:
+            n2_pos[i] = n2_pos[i-1]
+            
+    df['n2_risk_stop'] = n2_stop
+    df['n2_risk_pos'] = n2_pos
+    
+    # Nexus Signal (All 3 align)
+    # Buy: Kernel Bull, Gann Bull, Risk Bull
+    df['n2_signal'] = 0
+    df.loc[(df['n2_kernel_trend'] == 1) & (df['n2_gann_trend'] == 1) & (df['n2_risk_pos'] == 1), 'n2_signal'] = 1
+    df.loc[(df['n2_kernel_trend'] == -1) & (df['n2_gann_trend'] == -1) & (df['n2_risk_pos'] == -1), 'n2_signal'] = -1
+
+    # -------------------------------------------------------------------------
+    # SECTION 3: APEX VECTOR (Physics)
+    # -------------------------------------------------------------------------
+    # Efficiency
+    range_abs = df['high'] - df['low']
+    body_abs = abs(df['close'] - df['open'])
+    raw_eff = np.where(range_abs == 0, 0.0, body_abs / range_abs)
+    df['v3_efficiency'] = pd.Series(raw_eff).ewm(span=14, adjust=False).mean()
+    
+    # Volume Factor
+    vol_avg = df['volume'].rolling(55).mean()
+    vol_fact = np.where(vol_avg == 0, 1.0, df['volume'] / vol_avg)
+    
+    # Vector Flux
+    direction = np.sign(df['close'] - df['open'])
+    vector_raw = direction * df['v3_efficiency'] * vol_fact
+    df['v3_flux'] = pd.Series(vector_raw).ewm(span=5, adjust=False).mean()
+    
+    # States (Thresholds 0.6, 0.3)
+    df['v3_state'] = 'HEAT'
+    df.loc[df['v3_flux'] > 0.6, 'v3_state'] = 'SUPER_BULL'
+    df.loc[df['v3_flux'] < -0.6, 'v3_state'] = 'SUPER_BEAR'
+    df.loc[abs(df['v3_flux']) < 0.3, 'v3_state'] = 'RESISTIVE'
+
+    # -------------------------------------------------------------------------
+    # MERGED SIGNAL LOGIC
+    # -------------------------------------------------------------------------
+    # Enhanced Signals with Volume Filter AND Nexus Confirmation
     cond_buy = (df['is_bull']) & (~df['is_bull'].shift(1).fillna(False)) & (df['rvol']>1.2) & (df['money_flow']>0)
     cond_sell = (~df['is_bull']) & (df['is_bull'].shift(1).fillna(True)) & (df['rvol']>1.2) & (df['money_flow']<0)
+    
+    # Add Nexus Confirmation bonus (optional, but good for scoring)
+    # Here we keep base signals but use Nexus for confidence score
     
     # ML Filter
     if use_ml_filter:
@@ -1115,7 +1270,7 @@ def run_engines(df, amp, dev, hma_l, tp1, tp2, tp3, mf_l, vol_l, gann_l, use_ml_
     df['tp2'] = np.where(df['is_bull'], df['entry']+(risk*tp2), df['entry']-(risk*tp2))
     df['tp3'] = np.where(df['is_bull'], df['entry']+(risk*tp3), df['entry']-(risk*tp3))
 
-    # Apex & Gann
+    # Apex & Gann (Existing logic kept for validation)
     apex_base = calculate_hma(df['close'], 55)
     apex_atr = df['atr'] * 1.5
     df['apex_upper'] = apex_base + apex_atr
@@ -1758,7 +1913,8 @@ Trade Mgmt: {trail_status}
     fig = go.Figure()
     fig.add_candlestick(x=df['timestamp'], open=df['open'], high=df['high'], low=df['low'], close=df['close'], name='Price')
     fig.add_trace(go.Scatter(x=df['timestamp'], y=df['hma'], mode='lines', name='HMA', line=dict(color='#66fcf1', width=1)))
-    fig.add_trace(go.Scatter(x=df['timestamp'], y=df['vwap'], mode='lines', name='VWAP', line=dict(color='#9933ff', width=2)))
+    # Add Nexus Trend Line to Chart
+    fig.add_trace(go.Scatter(x=df['timestamp'], y=df['n2_kernel'], mode='lines', name='Nexus Trend', line=dict(color='#2E7D32', width=2, dash='dot')))
     
     fig.add_hline(y=fibs['fib_618'], line_dash="dash", line_color="#ffd740", annotation_text="FIB 0.618")
     fig.add_hline(y=fibs['fib_500'], line_dash="dash", line_color="#ff9800", annotation_text="FIB 0.5")
@@ -1785,7 +1941,7 @@ Trade Mgmt: {trail_status}
     st.plotly_chart(fig, use_container_width=True)
 
     # Tabs
-    t1, t2, t3, t4 = st.tabs(["📊 GANN", "🌊 FLOW", "🧠 SENT", "📈 Performance"])
+    t1, t2, t3, t4, t5 = st.tabs(["📊 GANN", "🌊 FLOW", "🧠 SENT", "📈 Performance", "⚛️ VECTOR"])
     
     with t1:
         f1 = go.Figure()
@@ -1864,6 +2020,18 @@ Trade Mgmt: {trail_status}
             f4.update_layout(height=250, template='plotly_dark', margin=dict(l=0, r=0, t=0, b=0))
             st.plotly_chart(f4, use_container_width=True)
 
+    with t5:
+        # Apex Vector Flux Chart
+        f5 = go.Figure()
+        flux_colors = np.where(df['v3_flux'] > 0, '#00e676', '#ff1744')
+        f5.add_trace(go.Bar(x=df['timestamp'], y=df['v3_flux'], marker_color=flux_colors, name='Vector Flux'))
+        # Add Threshold lines
+        f5.add_hline(y=0.6, line_dash="dot", line_color="green", annotation_text="Superconductor (Bull)")
+        f5.add_hline(y=-0.6, line_dash="dot", line_color="red", annotation_text="Superconductor (Bear)")
+        f5.update_layout(height=300, template='plotly_dark', margin=dict(l=0, r=0, t=0, b=0), yaxis_title="Efficiency Flux")
+        st.plotly_chart(f5, use_container_width=True)
+        st.caption("Physics Engine: Flux measures momentum efficiency. >0.6 is Superconductor state.")
+
     # Validation Checklist
     st.markdown("### ✅ SIGNAL VALIDATION CHECKLIST")
     
@@ -1871,15 +2039,16 @@ Trade Mgmt: {trail_status}
     apex_sig = last['apex_trend']
     gann_sig = last['gann_trend']
     momentum_sig = 1 if last['money_flow'] > 0 else -1
+    nexus_status = last['n2_signal']
     
     validation_items = {
         "Trend Confirmation": titan_sig == apex_sig,
         "Volume Surge": last['rvol'] > 1.5,
         "Momentum Align": titan_sig == momentum_sig,
         "No Squeeze": not last['in_squeeze'],
-        "Timeframe Suitability": ai_analysis['timeframe_score'] >= 70,
-        "Trailing Enabled": use_trailing,
-        "Session Optimal": "Active" in ai_analysis['session_note']
+        "Nexus Confirmation": nexus_status == titan_sig,
+        "Vector Flux Align": (last['v3_flux'] > 0 and titan_sig == 1) or (last['v3_flux'] < 0 and titan_sig == -1),
+        "Trailing Enabled": use_trailing
     }
     
     for item, passed in validation_items.items():
@@ -1889,13 +2058,13 @@ Trade Mgmt: {trail_status}
     
     pass_count = sum(validation_items.values())
     if pass_count >= 7:
-        grade = "A+ (EXCELLENT)"
+        grade = "A+ (GOD MODE)"
         grade_color = "#00e676"
     elif pass_count >= 5:
-        grade = "B+ (GOOD)"
+        grade = "B+ (EXCELLENT)"
         grade_color = "#ffd740"
     elif pass_count >= 3:
-        grade = "C (MEDIUM)"
+        grade = "C (GOOD)"
         grade_color = "#ff9800"
     else:
         grade = "D (POOR)"
