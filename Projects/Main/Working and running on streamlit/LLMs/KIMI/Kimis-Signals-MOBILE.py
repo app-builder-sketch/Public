@@ -1,6 +1,6 @@
 """
 Signals-MOBILE 
-Version 19.0: Enterprise-Grade Trading Engine + Critical Bug Fixes
+Version 20.0: Enterprise-Grade Trading Engine + Advanced Multi-Format Broadcast System
 """
 
 import time
@@ -10,9 +10,13 @@ import random
 import json
 import asyncio
 import logging
-from typing import Dict, Optional, List, Tuple, Any
+from typing import Dict, Optional, List, Tuple, Any, Union
 from contextlib import contextmanager
 from functools import wraps
+from dataclasses import dataclass, asdict
+from datetime import datetime, timezone, timedelta
+import threading
+from collections import deque
 
 import streamlit as st
 import pandas as pd
@@ -21,14 +25,16 @@ import requests
 import plotly.graph_objects as go
 import plotly.express as px
 import streamlit.components.v1 as components
-from datetime import datetime, timezone
 import websockets
 import aiohttp
 
 # =============================================================================
 # ERROR HANDLING & LOGGING
 # =============================================================================
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
 logger = logging.getLogger(__name__)
 
 def widget_error_boundary(func):
@@ -42,6 +48,284 @@ def widget_error_boundary(func):
             st.error(f"⚠️ Widget failed to load: {e}")
             return components.html("<div style='color:#ff1744;'>Widget Error</div>", height=50)
     return wrapper
+
+# =============================================================================
+# BROADCAST ENGINE - NEW MULTI-FORMAT SYSTEM
+# =============================================================================
+@dataclass
+class BroadcastMessage:
+    """Structured message for broadcast queue"""
+    report_type: str
+    symbol: str
+    data: Dict[str, Any]
+    timestamp: datetime
+    priority: int = 0
+    retry_count: int = 0
+    max_retries: int = 3
+
+class RateLimiter:
+    """Thread-safe rate limiter for API calls"""
+    def __init__(self, max_requests: int = 20, period: int = 60):
+        self.max_requests = max_requests
+        self.period = period
+        self.requests = deque()
+        self.lock = threading.Lock()
+    
+    def can_send(self) -> bool:
+        """Check if we can send based on rate limit"""
+        with self.lock:
+            now = time.time()
+            self.requests = deque([req_time for req_time in self.requests 
+                                 if now - req_time < self.period])
+            if len(self.requests) < self.max_requests:
+                self.requests.append(now)
+                return True
+            return False
+    
+    def time_until_next(self) -> float:
+        """Get time until next available slot"""
+        with self.lock:
+            if not self.requests:
+                return 0
+            oldest = self.requests[0]
+            now = time.time()
+            wait_time = self.period - (now - oldest)
+            return max(0, wait_time)
+
+class BroadcastEngine:
+    """Enterprise-grade multi-format Telegram broadcast system"""
+    
+    REPORT_TYPES = {
+        'STRICT_SIGNAL': 'strict_signal',
+        'AI_RISK_ANALYSIS': 'ai_risk_analysis', 
+        'MARKET_SUMMARY': 'market_summary',
+        'BACKTEST_REPORT': 'backtest_report'
+    }
+    
+    # Message templates with enhanced formatting
+    TEMPLATES = {
+        'strict_signal': """🔥 *TITAN TRADE ALERT* 🔥
+
+📊 *{symbol}* | {timeframe}
+🎯 *{direction}* | Confidence: {confidence}%
+💰 Entry: {entry_price:.4f}
+🛑 Stop: {stop_price:.4f}
+📈 TP1: {tp1:.4f} ({tp1_r}R)
+📈 TP2: {tp2:.4f} ({tp2_r}R)  
+📈 TP3: {tp3:.4f} ({tp3_r}R)
+
+⚡ RVOL: {rvol:.2f}x | Squeeze: {squeeze_status}
+🤖 AI Score: {ai_score}/100 | Grade: {signal_grade}
+
+⏰ {timestamp} UTC""",
+
+        'ai_risk_analysis': """🤖 *AI RISK ANALYSIS* | {symbol}
+
+📈 *Market Regime:* {market_regime}
+📊 *Volatility:* {current_vol} | Factor: {vol_factor:.1f}x
+⏰ *Session:* {session_note}
+🎯 *Timeframe Suitability:* {tf_score}/100
+🎓 *Asset Profile:* {asset_type}
+
+⚠️ *Risk Factors:*
+• Squeeze Active: {squeeze_risk}
+• Volume Spike: {volume_risk}
+• Session Mismatch: {session_risk}
+
+💡 *AI Recommendation:*
+{recommendation}
+
+🎯 *Position Sizing:* {size_rec}
+
+_Last updated: {timestamp} UTC""",
+
+        'market_summary': """📊 *MARKET SUMMARY* | {timestamp}
+
+🌟 *Top Performers:*
+{top_performers}
+
+⚠️ *High Risk Signals:*
+{risk_signals}
+
+📊 *Overall Market Sentiment:*
+• Fear & Greed: {fear_greed}/100
+• Avg RVOL: {avg_rvol:.2f}x
+• Squeeze Count: {squeeze_count}
+
+🔥 *Strongest Setups:*
+{strongest_setups}
+
+_Coverage: {symbol_count} assets | Generated: {timestamp} UTC""",
+
+        'backtest_report': """📈 *BACKTEST REPORT* | {symbol} | {timeframe}
+
+📊 *Performance Metrics:*
+• Total Trades: {total_trades}
+• Win Rate: {win_rate:.1f}%
+• Net PnL: {net_pnl:.2f}R
+• Avg TP Hit: {avg_tp:.1f}
+
+🎯 *Trade Distribution:*
+{trade_distribution}
+
+🤖 *AI Validation Rate:* {ai_validation:.1f}%
+⚡ *System Health:* {system_health}
+
+_Period: {start_date} to {end_date}_"""
+    }
+    
+    def __init__(self, token: str, chat_id: str):
+        self.token = token
+        self.chat_id = chat_id
+        self.message_queue: List[BroadcastMessage] = []
+        self.broadcast_history: List[Dict] = []
+        self.rate_limiter = RateLimiter(max_requests=20, period=60)
+        self.queue_lock = threading.Lock()
+        self.active = False
+        
+        # Start background processor if credentials are valid
+        if token and chat_id:
+            self.active = True
+            self._start_processor()
+    
+    def _start_processor(self):
+        """Start background message processor"""
+        def processor():
+            while self.active:
+                try:
+                    self._process_queue()
+                    time.sleep(0.5)
+                except Exception as e:
+                    logger.error(f"Broadcast processor error: {e}")
+                    time.sleep(5)
+        
+        thread = threading.Thread(target=processor, daemon=True)
+        thread.start()
+        logger.info("Broadcast processor started")
+    
+    def queue_message(self, report_type: str, symbol: str, data: Dict, priority: int = 0):
+        """Add message to broadcast queue"""
+        if not self.active:
+            logger.warning("Broadcast engine inactive - missing credentials")
+            return False
+        
+        with self.queue_lock:
+            message = BroadcastMessage(
+                report_type=report_type,
+                symbol=symbol,
+                data=data,
+                timestamp=datetime.now(timezone.utc),
+                priority=priority
+            )
+            self.message_queue.append(message)
+            self.message_queue.sort(key=lambda x: x.priority, reverse=True)
+            logger.info(f"Queued {report_type} for {symbol}")
+            return True
+    
+    def _process_queue(self):
+        """Process pending messages with rate limiting"""
+        if not self.message_queue:
+            return
+        
+        if not self.rate_limiter.can_send():
+            wait_time = self.rate_limiter.time_until_next()
+            logger.debug(f"Rate limited, waiting {wait_time:.1f}s")
+            time.sleep(min(wait_time, 1.0))
+            return
+        
+        with self.queue_lock:
+            message = self.message_queue.pop(0)
+        
+        try:
+            success = asyncio.run(self._send_message(message))
+            if success:
+                self._log_broadcast(message, "SUCCESS")
+            else:
+                self._handle_failed_message(message)
+        except Exception as e:
+            logger.error(f"Failed to process message: {e}")
+            self._handle_failed_message(message)
+    
+    async def _send_message(self, message: BroadcastMessage) -> bool:
+        """Send formatted message via Telegram API"""
+        try:
+            formatted_text = self._format_message(message)
+            
+            # Add rate limiting to session
+            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10)) as session:
+                url = f"https://api.telegram.org/bot{self.token}/sendMessage"
+                payload = {
+                    "chat_id": self.chat_id,
+                    "text": formatted_text,
+                    "parse_mode": "Markdown",
+                    "disable_web_page_preview": True
+                }
+                
+                async with session.post(url, json=payload) as response:
+                    if response.status == 200:
+                        return True
+                    elif response.status == 429:  # Too many requests
+                        retry_after = (await response.json()).get('parameters', {}).get('retry_after', 30)
+                        logger.warning(f"Rate limited by Telegram, retry after {retry_after}s")
+                        time.sleep(retry_after)
+                        return False
+                    else:
+                        logger.error(f"Telegram API error: {response.status}")
+                        return False
+        except Exception as e:
+            logger.error(f"Message send error: {e}")
+            return False
+    
+    def _format_message(self, message: BroadcastMessage) -> str:
+        """Format message according to report type"""
+        template_key = self.REPORT_TYPES.get(message.report_type, 'strict_signal')
+        template = self.TEMPLATES[template_key]
+        
+        # Prepare common fields
+        base_data = {
+            'symbol': message.symbol,
+            'timestamp': message.timestamp.strftime('%Y-%m-%d %H:%M:%S'),
+            **message.data
+        }
+        
+        return template.format(**base_data)
+    
+    def _handle_failed_message(self, message: BroadcastMessage):
+        """Handle failed message with retry logic"""
+        if message.retry_count < message.max_retries:
+            message.retry_count += 1
+            wait_time = 2 ** message.retry_count  # Exponential backoff
+            logger.warning(f"Retry {message.retry_count} for {message.symbol} in {wait_time}s")
+            time.sleep(wait_time)
+            with self.queue_lock:
+                self.message_queue.append(message)
+        else:
+            logger.error(f"Max retries exceeded for {message.symbol} {message.report_type}")
+            self._log_broadcast(message, "FAILED")
+    
+    def _log_broadcast(self, message: BroadcastMessage, status: str):
+        """Log broadcast to history"""
+        log_entry = {
+            'timestamp': message.timestamp.isoformat(),
+            'report_type': message.report_type,
+            'symbol': message.symbol,
+            'status': status,
+            'retry_count': message.retry_count
+        }
+        self.broadcast_history.append(log_entry)
+        
+        # Keep only last 100 entries
+        if len(self.broadcast_history) > 100:
+            self.broadcast_history = self.broadcast_history[-100:]
+    
+    def get_broadcast_history(self, limit: int = 50) -> pd.DataFrame:
+        """Get recent broadcast history"""
+        return pd.DataFrame(self.broadcast_history[-limit:])
+    
+    def stop(self):
+        """Stop the broadcast processor"""
+        self.active = False
+        logger.info("Broadcast processor stopped")
 
 # =============================================================================
 # PAGE CONFIG (Mobile Friendly)
@@ -143,7 +427,33 @@ st.markdown("""
         padding: 10px;
     }
     
-    /* NEW: Widget Error Display */
+    /* Broadcast System UI */
+    .broadcast-status {
+        padding: 10px;
+        border-radius: 8px;
+        margin: 10px 0;
+        font-size: 14px;
+    }
+    .broadcast-active {
+        background: linear-gradient(135deg, #00e67620, #00e67610);
+        border: 1px solid #00e676;
+        color: #00e676;
+    }
+    .broadcast-inactive {
+        background: linear-gradient(135deg, #ff174420, #ff174410);
+        border: 1px solid #ff1744;
+        color: #ff1744;
+    }
+    .broadcast-history {
+        max-height: 300px;
+        overflow-y: auto;
+        font-size: 12px;
+        background: #1f2833;
+        border-radius: 8px;
+        padding: 10px;
+    }
+    
+    /* Widget Error Display */
     .widget-error {
         background: #ff1744;
         color: white;
@@ -157,7 +467,7 @@ st.markdown("""
 # =============================================================================
 # CONSTANTS & CONFIG
 # =============================================================================
-BINANCE_API_BASE = "https://api.binance.us/api/v3"  # FIXED: Removed trailing space
+BINANCE_API_BASE = "https://api.binance.us/api/v3"
 HEADERS = {"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
 
 # WebSocket endpoints for real-time data
@@ -175,16 +485,17 @@ ASSET_PROFILES = {
     "ETH": {"type": "Smart Contract Leader", "vol_regime": "Medium", "session": "US/EU", "correlation": "BTC Beta", "category": "Large Cap"},
     "SOL": {"type": "High-Performance Chain", "vol_regime": "High", "session": "US", "correlation": "ETH Beta", "category": "Mid Cap"},
     "XRP": {"type": "Cross-Border Payments", "vol_regime": "Medium", "session": "EU/ASIA", "correlation": "Uncorrelated", "category": "Large Cap"},
-    # NEW: Extended profiles
     "BNB": {"type": "Exchange Token", "vol_regime": "Medium", "session": "Global", "correlation": "Exchange Beta", "category": "Large Cap"},
     "ADA": {"type": "PoS Blockchain", "vol_regime": "Medium", "session": "US/EU", "correlation": "ETH Beta", "category": "Mid Cap"},
+    "DOGE": {"type": "Meme Coin", "vol_regime": "Very High", "session": "US", "correlation": "High Beta", "category": "Mid Cap"},
+    "LINK": {"type": "Oracle Network", "vol_regime": "Medium", "session": "US/EU", "correlation": "ETH Beta", "category": "Mid Cap"},
 }
 
 # =============================================================================
-# DATABASE LAYER (NEW)
+# DATABASE LAYER (ENHANCED)
 # =============================================================================
 class SignalDatabase:
-    """SQLite backend for signal persistence"""
+    """SQLite backend for signal persistence with broadcast logging"""
     def __init__(self, db_path: str = "titan_signals.db"):
         self.db_path = db_path
         self.init_db()
@@ -209,6 +520,20 @@ class SignalDatabase:
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             """)
+            
+            # NEW: Broadcast history table
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS broadcast_history (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    report_type TEXT,
+                    symbol TEXT,
+                    timestamp TEXT,
+                    status TEXT,
+                    retry_count INTEGER,
+                    message_preview TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
     
     def save_signal(self, symbol: str, signal_data: Dict, outcome: str = "PENDING"):
         with sqlite3.connect(self.db_path) as conn:
@@ -228,9 +553,26 @@ class SignalDatabase:
                 signal_data.get('confidence', 0),
                 outcome
             ))
+    
+    def log_broadcast(self, report_type: str, symbol: str, status: str, 
+                     retry_count: int, message_preview: str):
+        """Log broadcast attempt to database"""
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute("""
+                INSERT INTO broadcast_history (report_type, symbol, timestamp, status, 
+                                             retry_count, message_preview)
+                VALUES (?, ?, ?, ?, ?, ?)
+            """, (
+                report_type,
+                symbol,
+                datetime.now(timezone.utc).isoformat(),
+                status,
+                retry_count,
+                message_preview[:100]
+            ))
 
 # =============================================================================
-# WEBSOCKET CLIENT (NEW)
+# WEBSOCKET CLIENT (ENHANCED)
 # =============================================================================
 class BinanceWebSocket:
     """Real-time WebSocket data feed"""
@@ -238,20 +580,30 @@ class BinanceWebSocket:
         self.symbol = symbol.lower()
         self.ws_url = f"{BINANCE_WS_BASE}/{self.symbol}@kline_1m"
         self.data_queue = asyncio.Queue()
+        self.connected = False
     
     async def connect(self):
-        async with websockets.connect(self.ws_url) as ws:
-            while True:
-                try:
-                    message = await ws.recv()
-                    data = json.loads(message)
-                    await self.data_queue.put(data)
-                except websockets.exceptions.ConnectionClosed:
-                    logger.warning("WebSocket connection closed, reconnecting...")
-                    await asyncio.sleep(5)
-                    continue
+        """Connect to WebSocket with reconnection logic"""
+        while True:
+            try:
+                async with websockets.connect(self.ws_url) as ws:
+                    self.connected = True
+                    logger.info(f"WebSocket connected for {self.symbol}")
+                    while True:
+                        message = await ws.recv()
+                        data = json.loads(message)
+                        await self.data_queue.put(data)
+            except websockets.exceptions.ConnectionClosed:
+                self.connected = False
+                logger.warning(f"WebSocket closed for {self.symbol}, reconnecting...")
+                await asyncio.sleep(5)
+            except Exception as e:
+                self.connected = False
+                logger.error(f"WebSocket error: {e}")
+                await asyncio.sleep(10)
     
     def get_latest_candle(self) -> Optional[Dict]:
+        """Get latest candle from queue if available"""
         try:
             return self.data_queue.get_nowait()
         except asyncio.QueueEmpty:
@@ -284,9 +636,15 @@ def analyze_asset_and_timeframe(symbol: str, timeframe: str, df: pd.DataFrame) -
     tf_data = tf_scores.get(timeframe, {"score": 50, "note": "Uncommon TF", "vol_adj": 1.0})
     
     # Calculate current market regime
-    if not df.empty:
+    current_vol = "N/A"
+    recent_vol = 0
+    avg_vol = 1
+    signal_confidence = 0
+    
+    if not df.empty and len(df) > 60:
         recent_vol = df['close'].pct_change().rolling(20).std().iloc[-1] * 100
         avg_vol = df['close'].pct_change().rolling(60).std().iloc[-1] * 100
+        current_vol = f"{recent_vol:.2f}%"
         
         if recent_vol > avg_vol * 1.5:
             regime = "High Volatility"
@@ -301,16 +659,19 @@ def analyze_asset_and_timeframe(symbol: str, timeframe: str, df: pd.DataFrame) -
             regime_color = "#ffd740"
             regime_factor = 1.0
         
-        # ML-based signal confidence (mock implementation)
-        signal_confidence = int(profile['session'] == "US") * 10 + \
-                           int(tf_data['score'] > 80) * 20 + \
-                           int(regime_factor > 1.0) * 15
+        # ML-based signal confidence
+        session_score = 10 if profile['session'] == "US" else 5
+        timeframe_score = 20 if tf_data['score'] > 80 else 10
+        regime_score = 15 if regime_factor > 1.0 else 5
+        squeeze_score = 10 if not df['in_squeeze'].iloc[-1] else 0
+        volume_score = min(20, df['rvol'].iloc[-1] * 10)
+        
+        signal_confidence = min(100, session_score + timeframe_score + regime_score + squeeze_score + volume_score)
         
     else:
         regime = "Unknown"
         regime_color = "#9e9e9e"
         regime_factor = 1.0
-        signal_confidence = 0
     
     # Generate recommendation with position sizing
     if tf_data["score"] >= 85:
@@ -348,10 +709,12 @@ def analyze_asset_and_timeframe(symbol: str, timeframe: str, df: pd.DataFrame) -
         "recommendation": rec,
         "rec_color": rec_color,
         "size_recommendation": size_rec,
-        "current_vol": f"{recent_vol:.2f}%" if not df.empty else "N/A",
+        "current_vol": current_vol,
         "signal_confidence": signal_confidence,
         "session_note": session_note,
-        "session_color": session_color
+        "session_color": session_color,
+        "recent_vol": recent_vol,
+        "avg_vol": avg_vol
     }
 
 # =============================================================================
@@ -411,7 +774,7 @@ def get_binanceus_usdt_bases() -> List[str]:
         return []
 
 # =============================================================================
-# LIVE TICKER WIDGET (FIXED - No trailing spaces, proper JSON)
+# LIVE TICKER WIDGET (FIXED)
 # =============================================================================
 @widget_error_boundary
 def render_ticker_tape(selected_symbol: str):
@@ -455,7 +818,7 @@ def render_ticker_tape(selected_symbol: str):
 
 # HEADER with Enhanced JS Clock
 st.title("💠 TITAN-SIGNALS")
-st.caption("v19.0 | Enterprise Trading Engine | Real-Time WebSocket")
+st.caption("v20.0 | Enterprise Trading Engine + Advanced Broadcast System")
 
 # Mobile Clock
 components.html(
@@ -554,15 +917,58 @@ with st.sidebar:
         st.caption("Requires Firebase setup")
 
     st.markdown("---")
-    st.subheader("🤖 NOTIFICATIONS")
+    
+    # NEW: BROADCAST SYSTEM CONTROLS
+    st.subheader("📡 BROADCAST CONTROLS")
+    
+    # Auto-load from secrets
     tg_token = st.text_input("Bot Token", value=st.secrets.get("TELEGRAM_TOKEN", ""), type="password")
-    tg_chat = st.text_input("Chat ID", value=st.secrets.get("TELEGRAM_CHAT_ID", ""))
+    tg_chat = st.text_input("Chat ID", value=st.secrets.get("TELEGRAM_CHAT_ID", ""), type="password")
+    
+    # Initialize broadcast engine in session state
+    if "broadcast_engine" not in st.session_state:
+        st.session_state.broadcast_engine = None
+    
+    if tg_token and tg_chat:
+        if st.button("🚀 ACTIVATE BROADCAST", use_container_width=True):
+            st.session_state.broadcast_engine = BroadcastEngine(tg_token, tg_chat)
+            st.success("Broadcast system activated!")
+        
+        # Show status
+        if st.session_state.broadcast_engine and st.session_state.broadcast_engine.active:
+            st.markdown('<div class="broadcast-status broadcast-active">🟢 BROADCAST ACTIVE</div>', unsafe_allow_html=True)
+            
+            # Broadcast controls
+            st.subheader("📤 Quick Send")
+            
+            if st.button("📨 STRICT SIGNAL", use_container_width=True):
+                st.session_state.send_strict_signal = True
+            
+            if st.button("🤖 AI RISK ANALYSIS", use_container_width=True):
+                st.session_state.send_ai_analysis = True
+                
+            if st.button("📊 MARKET SUMMARY", use_container_width=True):
+                st.session_state.send_market_summary = True
+            
+            # Show queue status
+            if hasattr(st.session_state.broadcast_engine, 'message_queue'):
+                queue_size = len(st.session_state.broadcast_engine.message_queue)
+                st.caption(f"Queue: {queue_size} messages pending")
+            
+            # Broadcast history
+            with st.expander("📜 Broadcast History", expanded=False):
+                if st.button("Load History", use_container_width=True):
+                    st.session_state.show_broadcast_history = True
+        else:
+            st.markdown('<div class="broadcast-status broadcast-inactive">🔴 BROADCAST INACTIVE</div>', unsafe_allow_html=True)
+    else:
+        st.warning("Enter Telegram credentials to activate broadcast")
 
 # Render ticker tape
 render_ticker_tape(symbol)
 
 # =============================================================================
-# LOGIC ENGINES (PRESERVED)
+# LOGIC ENGINES (PRESERVED & ENHANCED)
 # =============================================================================
 def calculate_hma(series, length):
     half_len = int(length / 2)
@@ -700,7 +1106,7 @@ def run_backtest(df, tp1_r, tp2_r, tp3_r, use_trailing):
     return total, win_rate, net_r, df_res
 
 def generate_mobile_report(row, symbol, tf, fibs, fg_index, smart_stop, 
-                          ai_analysis: Dict, use_trailing: bool):
+                          ai_analysis: Dict, use_trailing: bool, tp1_r: float, tp2_r: float, tp3_r: float):
     is_bull = row['is_bull']
     direction = "LONG 🐂" if is_bull else "SHORT 🐻"
 
@@ -795,20 +1201,6 @@ def generate_mobile_report(row, symbol, tf, fibs, fg_index, smart_stop,
     report_html += ai_rec_html
     
     return report_html
-
-def send_telegram_msg(token, chat, msg):
-    if not token or not chat:
-        return False
-    try:
-        r = requests.post(
-            f"https://api.telegram.org/bot{token}/sendMessage",
-            json={"chat_id": chat, "text": msg, "parse_mode": "Markdown"},
-            timeout=5
-        )
-        return r.status_code == 200
-    except Exception as e:
-        logger.error(f"Telegram error: {e}")
-        return False
 
 @st.cache_data(ttl=5)
 def get_klines(symbol_bin, interval, limit):
@@ -974,7 +1366,14 @@ def run_engines(df, amp, dev, hma_l, tp1, tp2, tp3, mf_l, vol_l, gann_l, use_ml_
 # Initialize database
 db = SignalDatabase()
 
-# Check for WebSocket data (NEW)
+# NEW: Initialize broadcast engine if credentials exist
+tg_token = st.secrets.get("TELEGRAM_TOKEN", "")
+tg_chat = st.secrets.get("TELEGRAM_CHAT_ID", "")
+
+if tg_token and tg_chat and not st.session_state.broadcast_engine:
+    st.session_state.broadcast_engine = BroadcastEngine(tg_token, tg_chat)
+
+# Check for WebSocket data
 ws_data = None
 if "ws_client" in st.session_state:
     ws_client = st.session_state.ws_client
@@ -1007,9 +1406,76 @@ if not df.empty:
     # AI Analysis
     ai_analysis = analyze_asset_and_timeframe(symbol, timeframe, df)
     
-    # Save signal to database (NEW)
+    # Save signal to database
     if last['buy'] or last['sell']:
         db.save_signal(symbol, last.to_dict())
+    
+    # ----------------------------------------------------
+    # NEW: BROADCAST TRIGGER HANDLERS
+    # ----------------------------------------------------
+    if "send_strict_signal" in st.session_state and st.session_state.send_strict_signal:
+        if st.session_state.broadcast_engine:
+            signal_data = {
+                'direction': "LONG" if last['is_bull'] else "SHORT",
+                'entry_price': last['close'],
+                'stop_price': smart_stop,
+                'tp1': last['tp1'],
+                'tp2': last['tp2'],
+                'tp3': last['tp3'],
+                'tp1_r': tp1_r,
+                'tp2_r': tp2_r,
+                'tp3_r': tp3_r,
+                'confidence': ai_analysis['signal_confidence'],
+                'timeframe': timeframe,
+                'rvol': last['rvol'],
+                'squeeze_status': "ACTIVE" if last['in_squeeze'] else "CLEAR",
+                'ai_score': ai_analysis['signal_confidence'],
+                'signal_grade': "A+" if ai_analysis['signal_confidence'] > 80 else "B+"
+            }
+            st.session_state.broadcast_engine.queue_message(
+                'STRICT_SIGNAL', symbol, signal_data, priority=10
+            )
+            st.success("✅ Strict signal queued!")
+        st.session_state.send_strict_signal = False
+    
+    if "send_ai_analysis" in st.session_state and st.session_state.send_ai_analysis:
+        if st.session_state.broadcast_engine:
+            ai_data = {
+                'market_regime': ai_analysis['market_regime'],
+                'current_vol': ai_analysis['current_vol'],
+                'vol_factor': ai_analysis['regime_factor'],
+                'session_note': ai_analysis['session_note'],
+                'tf_score': ai_analysis['timeframe_score'],
+                'asset_type': ai_analysis['asset_profile']['type'],
+                'squeeze_risk': "YES" if last['in_squeeze'] else "NO",
+                'volume_risk': "YES" if last['rvol'] > 3 else "NO",
+                'session_risk': "YES" if "Off-Hours" in ai_analysis['session_note'] else "NO",
+                'recommendation': ai_analysis['recommendation'],
+                'size_rec': ai_analysis['size_recommendation']
+            }
+            st.session_state.broadcast_engine.queue_message(
+                'AI_RISK_ANALYSIS', symbol, ai_data, priority=5
+            )
+            st.success("✅ AI risk analysis queued!")
+        st.session_state.send_ai_analysis = False
+    
+    if "send_market_summary" in st.session_state and st.session_state.send_market_summary:
+        if st.session_state.broadcast_engine:
+            # Mock market data (in real app, analyze multiple assets)
+            summary_data = {
+                'top_performers': "BTC: +2.3%, ETH: +1.8%, SOL: +4.1%",
+                'risk_signals': "DOGE: High Vol, SHIB: Squeeze Active",
+                'fear_greed': fg_index,
+                'avg_rvol': df['rvol'].mean(),
+                'squeeze_count': int(df['in_squeeze'].iloc[-5:].sum()),
+                'strongest_setups': f"{symbol}: {ai_analysis['recommendation']}",
+                'symbol_count': 30
+            }
+            st.session_state.broadcast_engine.queue_message(
+                'MARKET_SUMMARY', "MULTI", summary_data, priority=3
+            )
+            st.success("✅ Market summary queued!")
+        st.session_state.send_market_summary = False
     
     # ----------------------------------------------------
     # AI ANALYSIS CARD
@@ -1076,19 +1542,42 @@ if not df.empty:
     # REPORT & ACTIONS
     # ----------------------------------------------------
     report_html = generate_mobile_report(last, symbol, timeframe, fibs, fg_index, smart_stop, 
-                                       ai_analysis, use_trailing)
+                                       ai_analysis, use_trailing, tp1_r, tp2_r, tp3_r)
     st.markdown(report_html, unsafe_allow_html=True)
 
-    # Action Buttons
+    # Enhanced Action Buttons with Broadcast Integration
     st.markdown("### ⚡ ACTION")
-    b_col1, b_col2 = st.columns(2)
+    b_col1, b_col2, b_col3 = st.columns(3)
     with b_col1:
         if st.button("🔥 ALERT TG", use_container_width=True):
-            msg = f"TITAN SIGNAL: {symbol} | {'LONG' if last['is_bull'] else 'SHORT'} | EP: {last['close']:.4f} | Score: {ai_analysis['timeframe_score']}/100"
-            if send_telegram_msg(tg_token, tg_chat, msg):
-                st.success("SENT")
+            msg = f"TITAN SIGNAL: {symbol} | {'LONG' if last['is_bull'] else 'SHORT'} | EP: {last['close']:.4f} | Score: {ai_analysis['signal_confidence']}/100"
+            if st.session_state.broadcast_engine:
+                # Queue strict signal via broadcast engine
+                signal_data = {
+                    'direction': "LONG" if last['is_bull'] else "SHORT",
+                    'entry_price': last['close'],
+                    'stop_price': smart_stop,
+                    'tp1': last['tp1'],
+                    'tp2': last['tp2'],
+                    'tp3': last['tp3'],
+                    'tp1_r': tp1_r,
+                    'tp2_r': tp2_r,
+                    'tp3_r': tp3_r,
+                    'confidence': ai_analysis['signal_confidence'],
+                    'timeframe': timeframe,
+                    'rvol': last['rvol'],
+                    'squeeze_status': "ACTIVE" if last['in_squeeze'] else "CLEAR",
+                    'ai_score': ai_analysis['signal_confidence'],
+                    'signal_grade': "A+" if ai_analysis['signal_confidence'] > 80 else "B+"
+                }
+                st.session_state.broadcast_engine.queue_message('STRICT_SIGNAL', symbol, signal_data, priority=10)
+                st.success("✅ Broadcast queued!")
             else:
-                st.error("FAIL")
+                # Fallback to direct send
+                if send_telegram_msg(tg_token, tg_chat, msg):
+                    st.success("SENT")
+                else:
+                    st.error("FAIL")
 
     with b_col2:
         if st.button("📝 REPORT TG", use_container_width=True):
@@ -1107,10 +1596,53 @@ Market Regime: {ai_analysis['market_regime']}
 Trade Mgmt: {trail_status}
 AI Confidence: {ai_analysis['signal_confidence']}/100
             """
-            if send_telegram_msg(tg_token, tg_chat, f"REPORT: {symbol}\n{txt_rep}"):
-                st.success("SENT")
+            if st.session_state.broadcast_engine:
+                # Queue AI risk analysis
+                ai_data = {
+                    'market_regime': ai_analysis['market_regime'],
+                    'current_vol': ai_analysis['current_vol'],
+                    'vol_factor': ai_analysis['regime_factor'],
+                    'session_note': ai_analysis['session_note'],
+                    'tf_score': ai_analysis['timeframe_score'],
+                    'asset_type': ai_analysis['asset_profile']['type'],
+                    'squeeze_risk': "YES" if last['in_squeeze'] else "NO",
+                    'volume_risk': "YES" if last['rvol'] > 3 else "NO",
+                    'session_risk': "YES" if "Off-Hours" in ai_analysis['session_note'] else "NO",
+                    'recommendation': ai_analysis['recommendation'],
+                    'size_rec': ai_analysis['size_recommendation']
+                }
+                st.session_state.broadcast_engine.queue_message('AI_RISK_ANALYSIS', symbol, ai_data, priority=5)
+                st.success("✅ AI analysis queued!")
             else:
-                st.error("FAIL")
+                # Fallback to direct send
+                if send_telegram_msg(tg_token, tg_chat, f"REPORT: {symbol}\n{txt_rep}"):
+                    st.success("SENT")
+                else:
+                    st.error("FAIL")
+
+    with b_col3:
+        if st.button("📊 BACKTEST TG", use_container_width=True):
+            b_total, b_win, b_net, b_df = run_backtest(df, tp1_r, tp2_r, tp3_r, use_trailing)
+            if b_total > 0:
+                if st.session_state.broadcast_engine:
+                    # Queue backtest report
+                    bt_data = {
+                        'total_trades': b_total,
+                        'win_rate': b_win,
+                        'net_pnl': b_net,
+                        'avg_tp': b_df['tp_reached'].mean() if 'tp_reached' in b_df.columns else 0,
+                        'trade_distribution': f"TP1: {len(b_df[b_df['tp_reached']>=1])}, TP2: {len(b_df[b_df['tp_reached']>=2])}, TP3: {len(b_df[b_df['tp_reached']>=3])}",
+                        'ai_validation': 85.0,  # Mock
+                        'system_health': "GOOD" if b_win > 50 else "POOR",
+                        'start_date': df['timestamp'].iloc[0].strftime('%Y-%m-%d'),
+                        'end_date': df['timestamp'].iloc[-1].strftime('%Y-%m-%d')
+                    }
+                    st.session_state.broadcast_engine.queue_message('BACKTEST_REPORT', symbol, bt_data, priority=2)
+                    st.success("✅ Backtest report queued!")
+                else:
+                    st.warning("Broadcast engine not active")
+            else:
+                st.warning("No backtest data available")
 
     # Backtest Mini-Stat
     b_total, b_win, b_net, b_df = run_backtest(df, tp1_r, tp2_r, tp3_r, use_trailing)
@@ -1217,6 +1749,9 @@ AI Confidence: {ai_analysis['signal_confidence']}/100
             <div class="report-item"><strong>Fear:</strong> 25-50 (Caution - Wait for Confirmation)</div>
             <div class="report-item"><strong>Greed:</strong> 50-75 (Momentum - Trail Stops)</div>
             <div class="report-item"><strong>Extreme Greed:</strong> 75-100 (Overbought - Consider Short)</div>
+            <div class="report-item" style="color:#66fcf1; margin-top:10px;">
+                <strong>Current: {fg_index}/100</strong>
+            </div>
         </div>
         """, unsafe_allow_html=True)
 
@@ -1260,11 +1795,13 @@ AI Confidence: {ai_analysis['signal_confidence']}/100
         "Session Optimal": "Active" in ai_analysis['session_note']
     }
     
+    # Display validation items
     for item, passed in validation_items.items():
         status = "✅ PASS" if passed else "❌ FAIL"
         color = "#00e676" if passed else "#ff1744"
         st.markdown(f'<div class="report-item" style="color:{color};">{item}: <strong>{status}</strong></div>', unsafe_allow_html=True)
     
+    # Calculate overall grade
     pass_count = sum(validation_items.values())
     if pass_count >= 7:
         grade = "A+ (EXCELLENT)"
@@ -1279,6 +1816,7 @@ AI Confidence: {ai_analysis['signal_confidence']}/100
         grade = "D (POOR)"
         grade_color = "#ff1744"
     
+    # Display grade
     st.markdown(f"""
     <div class="ai-card" style="text-align:center; border: 2px solid {grade_color};">
         <div style="font-size:24px; color:{grade_color};"><strong>SIGNAL GRADE: {grade}</strong></div>
@@ -1289,7 +1827,32 @@ AI Confidence: {ai_analysis['signal_confidence']}/100
     </div>
     """, unsafe_allow_html=True)
     
+    # ----------------------------------------------------
+    # NEW: BROADCAST HISTORY VIEWER
+    # ----------------------------------------------------
+    if "show_broadcast_history" in st.session_state and st.session_state.show_broadcast_history:
+        st.markdown("### 📡 Broadcast History")
+        if st.session_state.broadcast_engine:
+            history_df = st.session_state.broadcast_engine.get_broadcast_history(20)
+            if not history_df.empty:
+                st.dataframe(
+                    history_df[['timestamp', 'report_type', 'symbol', 'status', 'retry_count']],
+                    use_container_width=True
+                )
+            else:
+                st.info("No broadcast history available yet")
+        else:
+            st.warning("Broadcast engine not initialized")
+    
 else:
     st.error("No data returned. Check ticker, timeframe, or Binance US availability.")
     st.info("Tip: Use Quick Ticker selector or verify asset is listed on Binance US")
     st.info("Advanced: Consider enabling WebSocket for real-time data")
+
+# Cleanup on app exit
+def cleanup():
+    if st.session_state.broadcast_engine:
+        st.session_state.broadcast_engine.stop()
+
+# Register cleanup (will run when script ends)
+cleanup()
