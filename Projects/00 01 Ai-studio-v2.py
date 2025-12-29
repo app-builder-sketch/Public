@@ -28,7 +28,8 @@ import {
   Check,
   ChevronDown,
   Info,
-  BrainCircuit
+  BrainCircuit,
+  Link2
 } from 'lucide-react';
 import { MarketChart } from './components/MarketChart';
 import { TradingSignal, SignalDirection, AnalysisReport, TelegramConfig, AnalysisDepth } from './types';
@@ -102,28 +103,27 @@ const App: React.FC = () => {
     const errs: string[] = [];
     const { symbol, entry, tp1, tp2, tp3, sl, direction } = signal;
 
-    if (!symbol.trim()) errs.push("Symbol identification is missing.");
-    if (entry <= 0) errs.push(`Invalid Entry: ${entry} (Value must be positive)`);
-    if (tp1 <= 0) errs.push(`Invalid TP1: ${tp1} (Value must be positive)`);
-    if (tp2 <= 0) errs.push(`Invalid TP2: ${tp2} (Value must be positive)`);
-    if (tp3 <= 0) errs.push(`Invalid TP3: ${tp3} (Value must be positive)`);
-    if (sl <= 0) errs.push(`Invalid Stop Loss: ${sl} (Value must be positive)`);
-
+    if (!symbol.trim()) errs.push("Critical Error: Market Symbol identification missing.");
+    if (entry <= 0) errs.push(`Structural Error: Entry price (${entry}) must be a positive market value.`);
+    
+    // Detailed Chained Validation for BUY Logic: SL < Entry < TP1 < TP2 < TP3
     if (direction === SignalDirection.BUY) {
-      if (sl >= entry) errs.push(`BUY VIOLATION: Stop Loss (${sl}) must be lower than Entry (${entry}).`);
-      if (entry >= tp1) errs.push(`BUY VIOLATION: Take Profit 1 (${tp1}) must be higher than Entry (${entry}).`);
-      if (tp1 >= tp2) errs.push(`BUY VIOLATION: Take Profit 2 (${tp2}) must be higher than TP1 (${tp1}).`);
-      if (tp2 >= tp3) errs.push(`BUY VIOLATION: Take Profit 3 (${tp3}) must be higher than TP2 (${tp2}).`);
-    } else {
-      if (sl <= entry) errs.push(`SELL VIOLATION: Stop Loss (${sl}) must be higher than Entry (${entry}).`);
-      if (entry <= tp1) errs.push(`SELL VIOLATION: Take Profit 1 (${tp1}) must be lower than Entry (${entry}).`);
-      if (tp1 <= tp2) errs.push(`SELL VIOLATION: Take Profit 2 (${tp2}) must be lower than TP1 (${tp1}).`);
-      if (tp2 <= tp3) errs.push(`SELL VIOLATION: Take Profit 3 (${tp3}) must be lower than TP2 (${tp2}).`);
+      if (sl >= entry) errs.push(`BUY Logic Error: Stop Loss (${sl}) must be strictly lower than Entry (${entry}).`);
+      if (entry >= tp1) errs.push(`BUY Logic Error: Take Profit 1 (${tp1}) must be strictly higher than Entry (${entry}).`);
+      if (tp1 >= tp2) errs.push(`BUY Logic Error: Take Profit 2 (${tp2}) must be strictly higher than Take Profit 1 (${tp1}).`);
+      if (tp2 >= tp3) errs.push(`BUY Logic Error: Take Profit 3 (${tp3}) must be strictly higher than Take Profit 2 (${tp2}).`);
+    } 
+    // Detailed Chained Validation for SELL Logic: SL > Entry > TP1 > TP2 > TP3
+    else {
+      if (sl <= entry) errs.push(`SELL Logic Error: Stop Loss (${sl}) must be strictly higher than Entry (${entry}).`);
+      if (entry <= tp1) errs.push(`SELL Logic Error: Take Profit 1 (${tp1}) must be strictly lower than Entry (${entry}).`);
+      if (tp1 <= tp2) errs.push(`SELL Logic Error: Take Profit 2 (${tp2}) must be strictly lower than Take Profit 1 (${tp1}).`);
+      if (tp2 <= tp3) errs.push(`SELL Logic Error: Take Profit 3 (${tp3}) must be strictly lower than Take Profit 2 (${tp2}).`);
     }
 
     setErrors(errs);
     if (errs.length > 0) {
-      addLog(`[ERROR] Protocol Validation Breach: ${errs.length} issues identified.`);
+      addLog(`[ERROR] Protocol Violation Detected: ${errs.length} mathematical inconsistencies in signal.`);
     }
     return errs.length === 0;
   };
@@ -148,7 +148,7 @@ const App: React.FC = () => {
     if (!validateSignal()) return;
     
     if (!telegramConfig.botToken || !telegramConfig.chatId) {
-      addLog("[ERROR] Broadcast failed: Missing Credentials.");
+      addLog("[ERROR] Gateway Auth Error: Credentials undefined.");
       setActiveTab('settings');
       return;
     }
@@ -180,7 +180,7 @@ const App: React.FC = () => {
       addLog(`[AI] Initializing ${reportDepth} Neural ${isQuant ? 'Thinking' : 'Flash'} for ${signal.symbol}...`);
       const report = await generateTechnicalReport(signal.symbol, signal.timeframe, analysisContext, reportDepth);
       setCurrentReport(report);
-      addLog(`[AI] Synthesis complete. Reasoning fidelity: High.`);
+      addLog(`[AI] Synthesis complete. Reasoning fidelity: High. Grounded with Google Search.`);
     } catch (err: any) {
       addLog(`[ERROR] Neural engine mismatch: ${err.message}`);
     } finally {
@@ -306,17 +306,17 @@ const App: React.FC = () => {
                        </h3>
                     </div>
 
-                    {/* Logical Error Display */}
+                    {/* Enhanced Logical Error Dashboard */}
                     {errors.length > 0 && (
-                      <div className="mb-8 p-6 bg-red-950/40 border-2 border-red-500/50 rounded-[1.5rem] animate-in zoom-in-95 duration-300">
-                        <div className="flex items-center gap-3 mb-4 text-red-400">
-                          <ShieldAlert size={20} strokeWidth={3} />
-                          <h4 className="font-black text-xs uppercase tracking-widest">Protocol Validation Failure</h4>
+                      <div className="mb-8 p-6 bg-rose-950/30 border-2 border-rose-500/40 rounded-[2rem] animate-in zoom-in-95 duration-300 backdrop-blur-sm">
+                        <div className="flex items-center gap-3 mb-4 text-rose-400">
+                          <ShieldAlert size={22} strokeWidth={3} className="animate-pulse" />
+                          <h4 className="font-black text-xs uppercase tracking-[0.2em]">Protocol Validation Breach</h4>
                         </div>
-                        <ul className="space-y-2">
+                        <ul className="space-y-3">
                           {errors.map((err, idx) => (
-                            <li key={idx} className="flex items-start gap-2 text-xs text-red-400/90 font-bold">
-                              <span className="mt-1 w-1 h-1 rounded-full bg-red-500 shrink-0"></span>
+                            <li key={idx} className="flex items-start gap-3 text-[11px] text-rose-200/80 font-bold leading-relaxed">
+                              <span className="mt-1.5 w-1.5 h-1.5 rounded-full bg-rose-500 shrink-0"></span>
                               {err}
                             </li>
                           ))}
@@ -334,8 +334,8 @@ const App: React.FC = () => {
                           <div>
                             <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-3 block">Position</label>
                             <div className="flex p-1.5 bg-[#020617] rounded-2xl border border-slate-800">
-                              <button onClick={() => setSignal({...signal, direction: SignalDirection.BUY})} className={`flex-1 py-3 rounded-xl font-black text-xs ${signal.direction === SignalDirection.BUY ? 'bg-green-600 text-white' : 'text-slate-600'}`}>BUY</button>
-                              <button onClick={() => setSignal({...signal, direction: SignalDirection.SELL})} className={`flex-1 py-3 rounded-xl font-black text-xs ${signal.direction === SignalDirection.SELL ? 'bg-red-600 text-white' : 'text-slate-600'}`}>SELL</button>
+                              <button onClick={() => setSignal({...signal, direction: SignalDirection.BUY})} className={`flex-1 py-3 rounded-xl font-black text-xs transition-all ${signal.direction === SignalDirection.BUY ? 'bg-emerald-600 text-white shadow-lg' : 'text-slate-600'}`}>BUY</button>
+                              <button onClick={() => setSignal({...signal, direction: SignalDirection.SELL})} className={`flex-1 py-3 rounded-xl font-black text-xs transition-all ${signal.direction === SignalDirection.SELL ? 'bg-rose-600 text-white shadow-lg' : 'text-slate-600'}`}>SELL</button>
                             </div>
                           </div>
                           <div>
@@ -345,77 +345,75 @@ const App: React.FC = () => {
                             </select>
                           </div>
                         </div>
-                        <div>
-                          <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-3 block">Market Intel Layer</label>
-                          <div className="grid grid-cols-3 gap-2">
-                            {['NONE', 'QUICK', 'DEEP'].map(mode => (
-                              <button key={mode} onClick={() => { setSignalIntelMode(mode as any); setIntelPreview(null); }} className={`py-3 rounded-xl border font-black text-[10px] tracking-widest transition-all ${signalIntelMode === mode ? 'bg-indigo-600 border-indigo-500 text-white shadow-lg' : 'bg-[#020617] border-slate-800 text-slate-500'}`}>{mode}</button>
-                            ))}
+                        <div className="grid grid-cols-2 gap-6">
+                          <div>
+                            <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-3 block">Entry Target</label>
+                            <input type="number" value={signal.entry} onChange={(e) => setSignal({...signal, entry: Number(e.target.value)})} className="w-full bg-[#020617] border border-slate-800 rounded-2xl px-5 py-4 text-white outline-none font-mono font-bold focus:border-indigo-500" />
+                          </div>
+                          <div>
+                            <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-3 block">Stop Loss</label>
+                            <input type="number" value={signal.sl} onChange={(e) => setSignal({...signal, sl: Number(e.target.value)})} className="w-full bg-[#020617] border border-slate-800 rounded-2xl px-5 py-4 text-rose-500 outline-none font-mono font-bold" />
                           </div>
                         </div>
                       </div>
 
                       <div className="space-y-8">
-                        <div className="grid grid-cols-2 gap-6">
+                        <div className="grid grid-cols-3 gap-4">
                           <div>
-                            <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-3 block">Target 1</label>
-                            <input type="number" value={signal.tp1} onChange={(e) => setSignal({...signal, tp1: Number(e.target.value)})} className="w-full bg-[#020617] border border-slate-800 rounded-2xl px-5 py-4 text-green-500 outline-none font-mono font-bold" />
+                            <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-3 block">TP 1</label>
+                            <input type="number" value={signal.tp1} onChange={(e) => setSignal({...signal, tp1: Number(e.target.value)})} className="w-full bg-[#020617] border border-slate-800 rounded-2xl px-4 py-4 text-emerald-500 outline-none font-mono font-bold text-xs" />
                           </div>
                           <div>
-                            <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-3 block">Stop Loss</label>
-                            <input type="number" value={signal.sl} onChange={(e) => setSignal({...signal, sl: Number(e.target.value)})} className="w-full bg-[#020617] border border-slate-800 rounded-2xl px-5 py-4 text-red-500 outline-none font-mono font-bold" />
-                          </div>
-                        </div>
-                        <div className="grid grid-cols-2 gap-6">
-                          <div>
-                            <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-3 block">Target 2</label>
-                            <input type="number" value={signal.tp2} onChange={(e) => setSignal({...signal, tp2: Number(e.target.value)})} className="w-full bg-[#020617] border border-slate-800 rounded-2xl px-5 py-4 text-green-400 outline-none font-mono font-bold" />
+                            <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-3 block">TP 2</label>
+                            <input type="number" value={signal.tp2} onChange={(e) => setSignal({...signal, tp2: Number(e.target.value)})} className="w-full bg-[#020617] border border-slate-800 rounded-2xl px-4 py-4 text-emerald-400 outline-none font-mono font-bold text-xs" />
                           </div>
                           <div>
-                            <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-3 block">Target 3</label>
-                            <input type="number" value={signal.tp3} onChange={(e) => setSignal({...signal, tp3: Number(e.target.value)})} className="w-full bg-[#020617] border border-slate-800 rounded-2xl px-5 py-4 text-green-300 outline-none font-mono font-bold" />
+                            <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-3 block">TP 3</label>
+                            <input type="number" value={signal.tp3} onChange={(e) => setSignal({...signal, tp3: Number(e.target.value)})} className="w-full bg-[#020617] border border-slate-800 rounded-2xl px-4 py-4 text-emerald-300 outline-none font-mono font-bold text-xs" />
                           </div>
                         </div>
                         <div>
                           <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-3 block">Reasoning Basis</label>
-                          <textarea value={signal.strategy} onChange={(e) => setSignal({...signal, strategy: e.target.value})} rows={3} className="w-full bg-[#020617] border border-slate-800 rounded-2xl px-5 py-4 text-white outline-none focus:ring-2 focus:ring-indigo-600 font-medium italic resize-none text-sm" placeholder="Paste structural data..." />
+                          <textarea value={signal.strategy} onChange={(e) => setSignal({...signal, strategy: e.target.value})} rows={4} className="w-full bg-[#020617] border border-slate-800 rounded-2xl px-5 py-4 text-white outline-none focus:ring-2 focus:ring-indigo-600 font-medium italic resize-none text-sm" placeholder="Paste structural data..." />
                         </div>
-                        {signalIntelMode !== 'NONE' && (
-                          <button onClick={handleGenerateSignalIntel} disabled={loading} className="w-full py-3 bg-slate-900 border border-slate-800 rounded-xl text-[10px] font-black text-indigo-400 flex items-center justify-center gap-2">
-                            {loading ? <Loader2 size={12} className="animate-spin" /> : <Zap size={12} />}
-                            {intelPreview ? 'REFRESH NEURAL PREVIEW' : 'SYNTHESIZE MARKET INTEL'}
-                          </button>
-                        )}
                       </div>
                     </div>
 
-                    <button onClick={handleBroadcastSignal} disabled={loading} className="w-full mt-12 bg-gradient-to-r from-indigo-600 to-purple-700 hover:from-indigo-500 hover:to-purple-600 py-5 rounded-[1.5rem] font-black text-lg tracking-widest flex items-center justify-center gap-4 transition-all shadow-[0_20px_40px_-10px_rgba(79,70,229,0.4)]">
-                      {loading ? <Loader2 className="animate-spin" /> : <Send size={22} className="-rotate-45" />}
+                    <button onClick={handleBroadcastSignal} disabled={loading} className="w-full mt-12 bg-gradient-to-r from-indigo-600 to-purple-700 hover:from-indigo-500 hover:to-purple-600 py-5 rounded-[2rem] font-black text-lg tracking-widest flex items-center justify-center gap-4 transition-all shadow-[0_20px_40px_-10px_rgba(79,70,229,0.4)] disabled:opacity-50 group">
+                      {loading ? <Loader2 className="animate-spin" /> : <Send size={22} className="-rotate-45 group-hover:translate-x-1 group-hover:-translate-y-1 transition-transform" />}
                       {loading ? 'TRANSMITTING NEURAL PACKET...' : 'DEPLOY ENCRYPTED BROADCAST'}
                     </button>
                   </div>
                 </div>
 
                 <div className="lg:col-span-4 space-y-10">
-                  <div className="bg-[#0f172a] rounded-[2.5rem] border border-slate-800 overflow-hidden shadow-2xl p-8">
+                  <div className="bg-[#0f172a] rounded-[3rem] border border-slate-800 overflow-hidden shadow-2xl p-8 relative">
                      <div className="flex items-center gap-3 mb-6 pb-4 border-b border-slate-800/50">
                         <Smartphone size={20} className="text-indigo-500" />
                         <span className="text-[10px] font-black text-white uppercase tracking-widest">GATEWAY PREVIEW</span>
                       </div>
-                      <div className="w-full bg-[#020617] p-6 rounded-[2rem] border border-slate-800 relative overflow-hidden shadow-inner">
-                        <div className={`absolute top-0 left-0 w-1.5 h-full ${signal.direction === SignalDirection.BUY ? 'bg-emerald-500 shadow-[4px_0_15px_rgba(16,185,129,0.3)]' : 'bg-red-500 shadow-[4px_0_15px_rgba(239,68,68,0.3)]'}`}></div>
-                        <p className="text-[13px] font-black text-white mb-4 uppercase">🚀 SIGNAL: {signal.symbol} 🚀</p>
-                        <div className="space-y-3 font-mono text-[11px] font-bold">
-                          <p className="text-slate-500">DIRECTION: <span className={signal.direction === SignalDirection.BUY ? 'text-emerald-400' : 'text-red-400'}>{signal.direction === SignalDirection.BUY ? '🟢 BUY' : '🔴 SELL'}</span></p>
-                          <p className="text-slate-500">TF: <span className="text-white">{signal.timeframe}</span></p>
-                          <div className="h-[1px] bg-slate-800/50 my-4"></div>
-                          <div className="grid grid-cols-1 gap-2">
-                             <p className="text-white">📍 ENTRY: {signal.entry}</p>
+                      <div className="w-full bg-[#020617] p-8 rounded-[2.5rem] border border-slate-800 relative overflow-hidden shadow-inner">
+                        <div className={`absolute top-0 left-0 w-2 h-full ${signal.direction === SignalDirection.BUY ? 'bg-emerald-500' : 'bg-rose-500'}`}></div>
+                        <p className="text-[14px] font-black text-white mb-6 uppercase tracking-tight">🚀 SIGNAL: {signal.symbol} 🚀</p>
+                        <div className="space-y-4 font-mono text-[11px] font-bold">
+                          <p className="text-slate-500 uppercase tracking-tighter">DIRECTION: <span className={signal.direction === SignalDirection.BUY ? 'text-emerald-400' : 'text-rose-400'}>{signal.direction === SignalDirection.BUY ? '🟢 BUY' : '🔴 SELL'}</span></p>
+                          <p className="text-slate-500 uppercase tracking-tighter">TF: <span className="text-white">{signal.timeframe}</span></p>
+                          <div className="h-[1px] bg-slate-800/50 my-6"></div>
+                          <div className="space-y-3">
+                             <p className="text-white/90">📍 ENTRY: <span className="text-white underline decoration-indigo-500/50">{signal.entry}</span></p>
                              <p className="text-emerald-500">🎯 TP1: {signal.tp1}</p>
-                             <p className="text-red-500">🛑 SL: {signal.sl}</p>
+                             <p className="text-emerald-400">🎯 TP2: {signal.tp2}</p>
+                             <p className="text-emerald-300">🎯 TP3: {signal.tp3}</p>
+                             <p className="text-rose-500">🛑 SL: {signal.sl}</p>
                           </div>
-                          <p className="text-indigo-400 text-[10px] leading-relaxed italic border-t border-slate-800/50 mt-4 pt-4">{signal.strategy}</p>
+                          <p className="text-indigo-400 text-[10px] leading-relaxed italic border-t border-slate-800/50 mt-6 pt-6 line-clamp-4">{signal.strategy}</p>
                         </div>
+                      </div>
+                      <div className="mt-8 flex items-center justify-between px-2">
+                         <span className="text-[9px] font-black text-slate-500 uppercase tracking-widest">Logic Status:</span>
+                         <span className={`text-[9px] font-black px-3 py-1 rounded-full ${errors.length === 0 ? 'bg-emerald-500/10 text-emerald-500 border border-emerald-500/20' : 'bg-rose-500/10 text-rose-500 border border-rose-500/20'}`}>
+                           {errors.length === 0 ? 'VERIFIED' : 'INVALID'}
+                         </span>
                       </div>
                   </div>
                 </div>
@@ -454,9 +452,9 @@ const App: React.FC = () => {
                   </div>
                 </div>
 
-                <div className="bg-[#0f172a] rounded-[2.5rem] border border-slate-800 p-10 flex flex-col min-h-[600px] shadow-2xl">
+                <div className="bg-[#0f172a] rounded-[2.5rem] border border-slate-800 p-10 flex flex-col min-h-[600px] shadow-2xl relative">
                   {currentReport ? (
-                    <div className="flex-1 flex flex-col space-y-8 animate-in fade-in zoom-in-95">
+                    <div className="flex-1 flex flex-col space-y-8 animate-in fade-in zoom-in-95 overflow-hidden">
                       <div className="flex items-center justify-between">
                         <h4 className="text-2xl font-black text-white uppercase underline decoration-indigo-500 decoration-4 underline-offset-8">{currentReport.title}</h4>
                         <div className={`px-4 py-1.5 rounded-full text-[10px] font-black border-2 ${currentReport.outlook === 'BULLISH' ? 'bg-emerald-500/10 text-emerald-500 border-emerald-500/20' : 'bg-red-500/10 text-red-500 border-red-500/20'}`}>{currentReport.outlook}</div>
@@ -467,6 +465,27 @@ const App: React.FC = () => {
                       </div>
                       <div className="flex-1 overflow-y-auto custom-scrollbar space-y-8">
                         <div className="text-slate-400 text-sm leading-relaxed whitespace-pre-line bg-[#020617]/50 p-8 rounded-3xl border border-slate-800/50">{currentReport.technicalDetails}</div>
+                        
+                        {currentReport.sources && currentReport.sources.length > 0 && (
+                          <div className="space-y-4">
+                            <h5 className="text-[10px] font-black text-slate-500 uppercase tracking-widest px-2">Grounding Sources</h5>
+                            <div className="grid grid-cols-1 gap-2">
+                              {currentReport.sources.map((source, idx) => (
+                                <a 
+                                  key={idx} 
+                                  href={source.uri} 
+                                  target="_blank" 
+                                  rel="noopener noreferrer" 
+                                  className="flex items-center gap-3 p-4 bg-indigo-500/5 border border-indigo-500/10 rounded-2xl hover:bg-indigo-500/10 transition-colors group"
+                                >
+                                  <Link2 size={14} className="text-indigo-400 group-hover:text-indigo-300" />
+                                  <span className="text-xs font-bold text-slate-400 group-hover:text-slate-200 truncate flex-1">{source.title}</span>
+                                  <ExternalLink size={12} className="text-slate-600 group-hover:text-slate-400" />
+                                </a>
+                              ))}
+                            </div>
+                          </div>
+                        )}
                       </div>
                       <button onClick={handleBroadcastReport} className="w-full bg-indigo-600 py-5 rounded-[1.5rem] font-black text-lg tracking-widest flex items-center justify-center gap-4">
                         <Send size={22} className="-rotate-45" /> TRANSMIT INTELLIGENCE
