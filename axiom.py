@@ -1,650 +1,708 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { AssetClassMap, BroadcastConfig, DataPoint, FibLevels } from './types';
-import { ASSET_CLASSES, TIMEFRAMES } from './constants';
-import { generateData, getFundamentals } from './services/dataService';
-import { calculateFibs, calculateVolumeProfile } from './services/quantService';
-import { generateReport, REPORT_TYPES, ReportType } from './services/reportService';
-import TickerMarquee from './components/TickerMarquee';
-import LiveClock from './components/LiveClock';
-import { PriceChart, EntropyChart, FluxChart, VolumeProfileChart } from './components/Charts';
+# app.py
+import json
+import streamlit as st
+import streamlit.components.v1 as components
 
-function App() {
-  // State
-  const [selectedClass, setSelectedClass] = useState<string>("Crypto (Major)");
-  const [selectedTicker, setSelectedTicker] = useState<string>("BTC-USD");
-  const [timeframe, setTimeframe] = useState<string>("4h");
-  const [data, setData] = useState<DataPoint[]>([]);
-  const [fibs, setFibs] = useState<FibLevels | null>(null);
-  const [activeTab, setActiveTab] = useState<string>("tech");
+# ==========================================
+# PAGE CONFIG
+# ==========================================
+st.set_page_config(
+    layout="wide",
+    page_title="Axiom Quantitative | Titan Edition",
+    page_icon="👁️",
+)
 
-  // Broadcast & Report State
-  const [broadcastMsg, setBroadcastMsg] = useState("");
-  const [selectedReportType, setSelectedReportType] = useState<ReportType>("Quick Signal");
-  const [broadcastLog, setBroadcastLog] = useState<BroadcastConfig[]>([]);
+# ==========================================
+# SIDEBAR CONTROLS (sets initial state)
+# ==========================================
+st.sidebar.title("⚙️ Titan Controls")
+ticker_options = [
+    "BTC-USD",
+    "ETH-USD",
+    "SOL-USD",
+    "XRP-USD",
+    "SPY",
+    "QQQ",
+    "GC=F",
+    "SI=F",
+]
+tf_options = ["15M", "1H", "4H", "1D", "1W"]
 
-  // Mobile Toggle
-  const [isMobile, setIsMobile] = useState(false);
+initial_ticker = st.sidebar.selectbox("Default Ticker", ticker_options, index=0)
+initial_tf = st.sidebar.selectbox("Default Timeframe", tf_options, index=1)
+iframe_height = st.sidebar.slider("UI Height", 700, 1400, 980, 10)
 
-  // ✅ NEW: Sidebar credentials wired to state (persisted)
-  const [openAiKey, setOpenAiKey] = useState<string>("");
-  const [telegramToken, setTelegramToken] = useState<string>("");
-  const [telegramChatId, setTelegramChatId] = useState<string>("");
+# Safely embed initial values into JS
+INITIAL_TICKER_JS = json.dumps(initial_ticker)
+INITIAL_TF_JS = json.dumps(initial_tf)
 
-  // ✅ NEW: Telegram send status + error
-  const [telegramStatus, setTelegramStatus] = useState<"idle" | "sending" | "sent" | "error">("idle");
-  const [telegramError, setTelegramError] = useState<string>("");
+# ==========================================
+# FULL EMBEDDED UI (React + Tailwind + Recharts)
+# Rendered inside a Streamlit iframe via components.html
+# ==========================================
+HTML_APP = f"""<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Axiom Quantitative | Titan Edition</title>
 
-  // ✅ NEW: ticker search filter input (no changes to constants needed)
-  const [tickerSearch, setTickerSearch] = useState<string>("");
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link
+      href="https://fonts.googleapis.com/css2?family=Roboto+Mono:wght@300;400;500;700&family=Inter:wght@300;400;500;700&display=swap"
+      rel="stylesheet"
+    />
 
-  // ✅ NEW: optional parse mode toggle (kept simple; default OFF to avoid markdown parse errors)
-  const [telegramParseMode, setTelegramParseMode] = useState<"none" | "MarkdownV2">("none");
+    <style>
+      body {{
+        background-color: #050505;
+        color: #e0e0e0;
+        font-family: "Inter", sans-serif;
+        margin: 0;
+      }}
+      .font-mono {{
+        font-family: "Roboto Mono", monospace;
+      }}
+      /* Custom Scrollbar */
+      ::-webkit-scrollbar {{
+        width: 8px;
+        height: 8px;
+      }}
+      ::-webkit-scrollbar-track {{
+        background: #0a0a0a;
+      }}
+      ::-webkit-scrollbar-thumb {{
+        background: #333;
+        border-radius: 4px;
+      }}
+      ::-webkit-scrollbar-thumb:hover {{
+        background: #00f0ff;
+      }}
+      .glass-panel {{
+        background: rgba(255, 255, 255, 0.02);
+        backdrop-filter: blur(10px);
+        border: 1px solid rgba(255, 255, 255, 0.05);
+      }}
+      .neon {{
+        text-shadow: 0 0 16px rgba(0, 240, 255, 0.25);
+      }}
+      .ring-neon {{
+        box-shadow: 0 0 0 1px rgba(0, 240, 255, 0.22), 0 0 22px rgba(0, 240, 255, 0.08);
+      }}
+    </style>
 
-  // Load persisted credentials (additive)
-  useEffect(() => {
-    try {
-      const savedOpenAiKey = localStorage.getItem("AXIOM_OPENAI_KEY") || "";
-      const savedTelegramToken = localStorage.getItem("AXIOM_TELEGRAM_TOKEN") || "";
-      const savedTelegramChatId = localStorage.getItem("AXIOM_TELEGRAM_CHAT_ID") || "";
-      const savedParseMode = (localStorage.getItem("AXIOM_TELEGRAM_PARSE_MODE") as "none" | "MarkdownV2") || "none";
+    <script type="importmap">
+      {{
+        "imports": {{
+          "react/": "https://esm.sh/react@^19.2.3/",
+          "react": "https://esm.sh/react@^19.2.3",
+          "react-dom/": "https://esm.sh/react-dom@^19.2.3/",
+          "recharts": "https://esm.sh/recharts@^3.6.0"
+        }}
+      }}
+    </script>
+  </head>
 
-      setOpenAiKey(savedOpenAiKey);
-      setTelegramToken(savedTelegramToken);
-      setTelegramChatId(savedTelegramChatId);
-      setTelegramParseMode(savedParseMode);
-    } catch (e) {
-      // Ignore storage issues (private mode, etc.)
-    }
-  }, []);
+  <body>
+    <div id="root"></div>
 
-  // Persist credentials (additive)
-  useEffect(() => {
-    try { localStorage.setItem("AXIOM_OPENAI_KEY", openAiKey); } catch (e) {}
-  }, [openAiKey]);
+    <script type="module">
+      import React, {{ useMemo, useState }} from "react";
+      import {{ createRoot }} from "react-dom/client";
+      import {{
+        ResponsiveContainer,
+        AreaChart,
+        Area,
+        XAxis,
+        YAxis,
+        Tooltip,
+        CartesianGrid,
+      }} from "recharts";
 
-  useEffect(() => {
-    try { localStorage.setItem("AXIOM_TELEGRAM_TOKEN", telegramToken); } catch (e) {}
-  }, [telegramToken]);
+      // Initial state from Streamlit (sidebar)
+      const STREAMLIT_INITIAL_TICKER = {INITIAL_TICKER_JS};
+      const STREAMLIT_INITIAL_TF = {INITIAL_TF_JS};
 
-  useEffect(() => {
-    try { localStorage.setItem("AXIOM_TELEGRAM_CHAT_ID", telegramChatId); } catch (e) {}
-  }, [telegramChatId]);
+      // -----------------------------
+      // Mock Data Engine (wired)
+      // -----------------------------
+      function mulberry32(seed) {{
+        let t = seed >>> 0;
+        return function () {{
+          t += 0x6D2B79F5;
+          let r = Math.imul(t ^ (t >>> 15), 1 | t);
+          r ^= r + Math.imul(r ^ (r >>> 7), 61 | r);
+          return ((r ^ (r >>> 14)) >>> 0) / 4294967296;
+        }};
+      }}
 
-  useEffect(() => {
-    try { localStorage.setItem("AXIOM_TELEGRAM_PARSE_MODE", telegramParseMode); } catch (e) {}
-  }, [telegramParseMode]);
+      function hashStringToSeed(s) {{
+        let h = 2166136261;
+        for (let i = 0; i < s.length; i++) {{
+          h ^= s.charCodeAt(i);
+          h = Math.imul(h, 16777619);
+        }}
+        return h >>> 0;
+      }}
 
-  // Load Data
-  useEffect(() => {
-    const newData = generateData(selectedTicker, timeframe);
-    setData(newData);
-    setFibs(calculateFibs(newData));
-  }, [selectedTicker, timeframe]);
+      function genSeries({{ ticker, tf, points = 140 }}) {{
+        const seed = hashStringToSeed(`${{ticker}}::${{tf}}`);
+        const rnd = mulberry32(seed);
 
-  // Derived Metrics
-  const last = data.length > 0 ? data[data.length - 1] : null;
-  const fundamentals = useMemo(() => getFundamentals(selectedTicker), [selectedTicker]);
+        const tfScale =
+          tf === "15M" ? 1 :
+          tf === "1H"  ? 2 :
+          tf === "4H"  ? 3 :
+          tf === "1D"  ? 4 :
+          tf === "1W"  ? 6 : 3;
 
-  // Volume Profile
-  const { profile, poc } = useMemo(() => calculateVolumeProfile(data), [data]);
+        let price = 100 + (seed % 9000) / 100;
+        let vol = 0.6 * tfScale + rnd() * 1.6;
 
-  // Handlers
-  const handleGenerateReport = () => {
-    if (!last || !fibs) return;
-    const report = generateReport(selectedReportType, selectedTicker, data, fibs, fundamentals);
-    setBroadcastMsg(report);
-  };
+        const now = Date.now();
+        const stepMs =
+          tf === "15M" ? 15 * 60 * 1000 :
+          tf === "1H"  ? 60 * 60 * 1000 :
+          tf === "4H"  ? 4  * 60 * 60 * 1000 :
+          tf === "1D"  ? 24 * 60 * 60 * 1000 :
+          tf === "1W"  ? 7  * 24 * 60 * 60 * 1000 :
+          60 * 60 * 1000;
 
-  const handleCopy = () => {
-    if (!broadcastMsg) return;
-    navigator.clipboard.writeText(broadcastMsg);
-    // Simple visual feedback could be added here
-  };
+        const data = [];
+        for (let i = points - 1; i >= 0; i--) {{
+          const drift = (rnd() - 0.48) * vol;
+          const shock = (rnd() - 0.5) * (vol * 0.8);
+          price = Math.max(1, price + drift + shock);
 
-  // ✅ NEW: Telegram send helper (additive)
-  const sendTelegramMessage = async (token: string, chatId: string, text: string) => {
-    // Note: Telegram Bot API often blocks browser requests via CORS.
-    // If you get a CORS error, route this through a backend/serverless proxy.
-    const endpoint = `https://api.telegram.org/bot${token}/sendMessage`;
+          const ts = now - i * stepMs;
+          data.push({{
+            t: ts,
+            time: new Date(ts).toLocaleString(undefined, {{
+              month: "short",
+              day: "2-digit",
+              hour: "2-digit",
+              minute: "2-digit",
+            }}),
+            price: Number(price.toFixed(2)),
+          }});
+        }}
 
-    const body: any = {
-      chat_id: chatId,
-      text,
-      disable_web_page_preview: true
-    };
+        const last = data[data.length - 1]?.price ?? 0;
+        const prev = data[data.length - 2]?.price ?? last;
+        const change = last - prev;
+        const changePct = prev ? (change / prev) * 100 : 0;
 
-    // Optional parse mode (kept OFF by default to avoid parsing failures)
-    if (telegramParseMode === "MarkdownV2") {
-      body.parse_mode = "MarkdownV2";
-    }
+        return {{ data, last, change, changePct }};
+      }}
 
-    const res = await fetch(endpoint, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body)
-    });
+      // -----------------------------
+      // UI Building Blocks
+      // -----------------------------
+      function clsx(...xs) {{
+        return xs.filter(Boolean).join(" ");
+      }}
 
-    const json = await res.json().catch(() => null);
-
-    if (!res.ok || (json && json.ok === false)) {
-      const errDesc = json?.description || `HTTP ${res.status}`;
-      throw new Error(errDesc);
-    }
-
-    return json;
-  };
-
-  const handleBroadcast = async () => {
-    if (!broadcastMsg) return;
-
-    // Preserve your existing log behavior, but upgrade with real send attempt.
-    setTelegramStatus("sending");
-    setTelegramError("");
-
-    const hasCreds = telegramToken.trim().length > 0 && telegramChatId.trim().length > 0;
-
-    try {
-      if (!hasCreds) {
-        throw new Error("Missing Telegram Token or Chat ID (enter them in the sidebar).");
-      }
-
-      await sendTelegramMessage(telegramToken.trim(), telegramChatId.trim(), broadcastMsg);
-
-      const newBroadcast: BroadcastConfig = {
-        name: `${selectedTicker} ${selectedReportType}`,
-        message: broadcastMsg,
-        scheduleTime: new Date().toLocaleTimeString(),
-        status: 'sent'
-      };
-
-      setBroadcastLog([newBroadcast, ...broadcastLog]);
-      setBroadcastMsg("");
-      setTelegramStatus("sent");
-
-      // reset status back to idle after a moment (additive)
-      setTimeout(() => setTelegramStatus("idle"), 1200);
-    } catch (e: any) {
-      const msg =
-        (typeof e?.message === "string" && e.message) ||
-        "Failed to broadcast (possible CORS, invalid token/chat id, or Telegram API error).";
-
-      setTelegramStatus("error");
-      setTelegramError(msg);
-
-      // Also log the attempted broadcast as error (additive; does not remove your existing behavior)
-      const newBroadcast: BroadcastConfig = {
-        name: `${selectedTicker} ${selectedReportType}`,
-        message: broadcastMsg,
-        scheduleTime: new Date().toLocaleTimeString(),
-        status: 'sent' // preserving your type; status was 'sent' in your model
-      };
-      setBroadcastLog([newBroadcast, ...broadcastLog]);
-    }
-  };
-
-  // Determine Signal Bias for UI
-  const signalBias = useMemo(() => {
-    if (!last) return "NEUTRAL";
-    if (last.nexus_signal === 1) return "LONG";
-    if (last.nexus_signal === -1) return "SHORT";
-    return "WAIT";
-  }, [last]);
-
-  // Confidence Score for Meter
-  const confidenceScore = useMemo(() => {
-    if (!last) return 0;
-    let score = 0;
-    const isBull = (last.gm_apex_base || 0) < last.close;
-    if (last.nexus_signal === (isBull ? 1 : -1)) score += 50;
-    if (Math.abs(last.vector_flux || 0) > 0.5) score += 25;
-    if ((last.nexus_trend === 1 && isBull) || (last.nexus_trend === -1 && !isBull)) score += 25;
-    return score;
-  }, [last]);
-
-  // ✅ NEW: ticker list filtered by search (additive; no changes to ASSET_CLASSES needed)
-  const filteredTickers = useMemo(() => {
-    const list = ASSET_CLASSES[selectedClass] || [];
-    const q = tickerSearch.trim().toLowerCase();
-    if (!q) return list;
-    return list.filter(t => t.toLowerCase().includes(q));
-  }, [selectedClass, tickerSearch]);
-
-  return (
-    <div className={`min-h-screen ${isMobile ? 'p-2' : 'p-0'} text-gray-300 font-sans`}>
-      {/* Sidebar (Desktop) / Drawer (Mobile) would go here. Using a simplified layout for SPA */}
-      <div className="flex flex-col md:flex-row min-h-screen">
-
-        {/* SIDEBAR */}
-        <div className="w-full md:w-64 bg-[#080808] border-r border-[#222] p-4 flex flex-col gap-6">
-          <div className="mb-4">
-            <h1 className="text-2xl font-bold text-white tracking-tighter flex items-center gap-2">
-              <span className="text-[#00F0FF]">💠</span> AXIOM
-            </h1>
-            <p className="text-xs text-gray-500 tracking-widest ml-8">TITAN EDITION</p>
-          </div>
-
-          <div className="flex items-center gap-2 mb-2">
-            <label className="text-xs font-bold text-[#00F0FF]">MOBILE OPTIMIZED</label>
-            <input
-              type="checkbox"
-              checked={isMobile}
-              onChange={(e) => setIsMobile(e.target.checked)}
-              className="accent-[#00F0FF]"
-            />
-          </div>
-
-          <div className="space-y-4">
-            <div>
-              <label className="text-xs text-gray-500 uppercase block mb-1">Sector</label>
-              <select
-                value={selectedClass}
-                onChange={(e) => { setSelectedClass(e.target.value); setSelectedTicker(ASSET_CLASSES[e.target.value][0]); setTickerSearch(""); }}
-                className="w-full bg-[#111] border border-[#333] text-[#00F0FF] p-2 rounded text-sm focus:border-[#00F0FF] outline-none"
-              >
-                {Object.keys(ASSET_CLASSES).map(c => <option key={c} value={c}>{c}</option>)}
-              </select>
+      function Panel({{ title, subtitle, right, children, className }}) {{
+        return (
+          <div className={{clsx("glass-panel rounded-2xl p-4 ring-neon", className)}}>
+            <div className="flex items-start justify-between gap-3 mb-3">
+              <div>
+                <div className="text-sm font-mono tracking-wide text-white/80">{{title}}</div>
+                {{subtitle ? (
+                  <div className="text-xs text-white/45 mt-1">{{subtitle}}</div>
+                ) : null}}
+              </div>
+              {{right ? <div className="shrink-0">{{right}}</div> : null}}
             </div>
+            {{children}}
+          </div>
+        );
+      }}
 
-            {/* ✅ NEW: ticker search */}
-            <div>
-              <label className="text-xs text-gray-500 uppercase block mb-1">Ticker Search</label>
-              <input
-                value={tickerSearch}
-                onChange={(e) => setTickerSearch(e.target.value)}
-                placeholder="Type to filter (e.g., BTC, ETH, SPY)..."
-                className="w-full bg-[#111] border border-[#333] text-gray-200 p-2 rounded text-sm focus:border-[#00F0FF] outline-none"
-              />
-              <div className="text-[10px] text-gray-600 mt-1">
-                Showing <span className="text-gray-400 font-mono">{filteredTickers.length}</span> tickers
+      function Chip({{ children }}) {{
+        return (
+          <span className="inline-flex items-center rounded-full px-2.5 py-1 text-[11px] font-mono bg-white/5 border border-white/10 text-white/75">
+            {{children}}
+          </span>
+        );
+      }}
+
+      function Button({{ children, onClick, variant = "primary" }}) {{
+        const base =
+          "inline-flex items-center justify-center rounded-xl px-3 py-2 text-sm font-mono border transition active:scale-[0.99]";
+        const styles =
+          variant === "primary"
+            ? "bg-white/5 border-white/10 hover:border-white/20 hover:bg-white/7 text-white/85"
+            : "bg-transparent border-white/10 hover:border-white/20 text-white/70";
+        return (
+          <button className={{clsx(base, styles)}} onClick={{onClick}} type="button">
+            {{children}}
+          </button>
+        );
+      }}
+
+      function Select({{ value, onChange, options }}) {{
+        return (
+          <select
+            value={{value}}
+            onChange={{(e) => onChange(e.target.value)}}
+            className="font-mono text-sm bg-white/5 border border-white/10 rounded-xl px-3 py-2 outline-none hover:border-white/20"
+          >
+            {{options.map((o) => (
+              <option key={{o.value}} value={{o.value}} className="bg-black">
+                {{o.label}}
+              </option>
+            ))}}
+          </select>
+        );
+      }}
+
+      function TickerBanner({{ ticker, tf, last, changePct }}) {{
+        const isUp = changePct >= 0;
+        return (
+          <div className="glass-panel rounded-2xl px-4 py-3 ring-neon flex items-center justify-between gap-4">
+            <div className="flex items-center gap-3 min-w-0">
+              <div className="w-2.5 h-2.5 rounded-full" style={{{{ background: "rgba(0,240,255,0.85)" }}}} />
+              <div className="min-w-0">
+                <div className="font-mono text-white/90 tracking-wide neon truncate">
+                  {{ticker}} <span className="text-white/45">/</span> {{tf}}
+                </div>
+                <div className="text-xs text-white/45 truncate">
+                  Axiom Quantitative • Titan Edition • Live banner wired to selection
+                </div>
               </div>
             </div>
 
-            <div>
-              <label className="text-xs text-gray-500 uppercase block mb-1">Ticker</label>
-              <select
-                value={selectedTicker}
-                onChange={(e) => setSelectedTicker(e.target.value)}
-                className="w-full bg-[#111] border border-[#333] text-[#00F0FF] p-2 rounded text-sm focus:border-[#00F0FF] outline-none"
-              >
-                {filteredTickers.map(t => <option key={t} value={t}>{t}</option>)}
-              </select>
-            </div>
-
-            <div>
-              <label className="text-xs text-gray-500 uppercase block mb-1">Interval</label>
-              <select
-                value={timeframe}
-                onChange={(e) => setTimeframe(e.target.value)}
-                className="w-full bg-[#111] border border-[#333] text-[#00F0FF] p-2 rounded text-sm focus:border-[#00F0FF] outline-none"
-              >
-                {TIMEFRAMES.map(tf => <option key={tf} value={tf}>{tf}</option>)}
-              </select>
+            <div className="flex items-end gap-3 shrink-0">
+              <div className="text-right">
+                <div className="font-mono text-white/90 text-sm">{{last?.toFixed?.(2) ?? "—"}}</div>
+                <div className={{clsx("font-mono text-[11px]", isUp ? "text-white/70" : "text-white/70")}}>
+                  {{isUp ? "▲" : "▼"}} {{changePct?.toFixed?.(2) ?? "0.00"}}%
+                </div>
+              </div>
+              <Chip>STREAM</Chip>
             </div>
           </div>
+        );
+      }}
 
-          <div className="mt-auto border-t border-[#222] pt-4">
-            <div className="text-xs text-gray-500 mb-2">API Credentials</div>
-
-            {/* Preserved inputs, now wired to state (additive) */}
-            <input
-              type="password"
-              placeholder="OpenAI Key"
-              value={openAiKey}
-              onChange={(e) => setOpenAiKey(e.target.value)}
-              className="w-full bg-[#050505] border border-[#333] p-2 mb-2 text-xs rounded"
-            />
-
-            <input
-              type="password"
-              placeholder="Telegram Token"
-              value={telegramToken}
-              onChange={(e) => setTelegramToken(e.target.value)}
-              className="w-full bg-[#050505] border border-[#333] p-2 mb-2 text-xs rounded"
-            />
-
-            <input
-              type="text"
-              placeholder="Chat ID"
-              value={telegramChatId}
-              onChange={(e) => setTelegramChatId(e.target.value)}
-              className="w-full bg-[#050505] border border-[#333] p-2 text-xs rounded"
-            />
-
-            {/* ✅ NEW: parse mode toggle */}
-            <div className="flex items-center justify-between mt-3 gap-2">
-              <span className="text-[10px] text-gray-500 uppercase tracking-widest">Telegram Parse</span>
-              <select
-                value={telegramParseMode}
-                onChange={(e) => setTelegramParseMode(e.target.value as "none" | "MarkdownV2")}
-                className="bg-[#050505] border border-[#333] p-2 text-[10px] rounded text-gray-300 outline-none focus:border-[#00F0FF]"
-              >
-                <option value="none">Plain Text</option>
-                <option value="MarkdownV2">MarkdownV2</option>
-              </select>
-            </div>
-
-            <div className="text-[10px] text-gray-600 mt-2 leading-snug">
-              Note: Browser CORS may block Telegram API calls. If so, use a serverless proxy.
+      function PriceTooltip({{ active, payload, label }}) {{
+        if (!active || !payload?.length) return null;
+        const p = payload[0]?.payload;
+        return (
+          <div className="glass-panel rounded-xl px-3 py-2 border border-white/10">
+            <div className="font-mono text-xs text-white/80">{{p?.time ?? label}}</div>
+            <div className="font-mono text-sm text-white/90 mt-1">
+              {{p?.price?.toFixed?.(2) ?? "—"}}
             </div>
           </div>
-        </div>
+        );
+      }}
 
-        {/* MAIN CONTENT */}
-        <div className="flex-1 bg-[#050505] flex flex-col h-screen overflow-y-auto">
-          <TickerMarquee />
+      // -----------------------------
+      // Main App
+      // -----------------------------
+      function App() {{
+        const NAV = [
+          {{ id: "overview", label: "Overview" }},
+          {{ id: "charts", label: "Charts" }},
+          {{ id: "signals", label: "Signals" }},
+          {{ id: "scanner", label: "Scanner" }},
+          {{ id: "ai", label: "AI" }},
+          {{ id: "settings", label: "Settings" }},
+          {{ id: "logs", label: "Logs" }},
+        ];
 
-          {/* ✅ NEW: Live TradingView banner synced to selectedTicker */}
-          <div className="border-b border-[#111] bg-[#020202]">
-            <TradingViewTickerBanner symbol={selectedTicker} />
-          </div>
+        const TICKERS = [
+          {{ value: "BTC-USD", label: "BTC-USD" }},
+          {{ value: "ETH-USD", label: "ETH-USD" }},
+          {{ value: "SOL-USD", label: "SOL-USD" }},
+          {{ value: "XRP-USD", label: "XRP-USD" }},
+          {{ value: "SPY", label: "SPY" }},
+          {{ value: "QQQ", label: "QQQ" }},
+          {{ value: "GC=F", label: "Gold (GC=F)" }},
+          {{ value: "SI=F", label: "Silver (SI=F)" }},
+        ];
 
-          <div className="p-4 md:p-6 flex-1">
-            <LiveClock />
+        const TIMEFRAMES = [
+          {{ value: "15M", label: "15M" }},
+          {{ value: "1H", label: "1H" }},
+          {{ value: "4H", label: "4H" }},
+          {{ value: "1D", label: "1D" }},
+          {{ value: "1W", label: "1W" }},
+        ];
 
-            {/* METRICS */}
-            <div className={`grid ${isMobile ? 'grid-cols-1' : 'grid-cols-4'} gap-4 mb-6`}>
-              <MetricCard
-                label="Nexus Signal"
-                value={last?.nexus_signal === 1 ? "BUY" : last?.nexus_signal === -1 ? "SELL" : "WAIT"}
-                sub="TRINITY SYSTEM"
-                color={last?.nexus_signal === 1 ? "text-[#00E676]" : last?.nexus_signal === -1 ? "text-[#FF1744]" : "text-gray-400"}
-              />
-              <MetricCard
-                label="Vector State"
-                value={last?.vector_state || "Neutral"}
-                sub={`Flux: ${last?.vector_flux?.toFixed(2)}`}
-                color="text-[#00F0FF]"
-              />
-              <MetricCard
-                label="Entropy (CHEDO)"
-                value={last?.chedo?.toFixed(2) || "0.00"}
-                sub={Math.abs(last?.chedo || 0) > 0.7 ? "RISK" : "STABLE"}
-                color="text-[#D500F9]"
-              />
-              <MetricCard
-                label="Risk Line"
-                value={`$${last?.nexus_risk?.toFixed(2) || "0.00"}`}
-                sub="UT BOT TRAIL"
-                color={(last?.close || 0) > (last?.nexus_risk || 0) ? "text-[#00E676]" : "text-[#FF1744]"}
-              />
-            </div>
+        const [active, setActive] = useState("overview");
+        const [ticker, setTicker] = useState(STREAMLIT_INITIAL_TICKER || "BTC-USD");
+        const [tf, setTf] = useState(STREAMLIT_INITIAL_TF || "1H");
 
-            {/* TABS */}
-            <div className="mb-6 border-b border-[#222] flex gap-4 overflow-x-auto">
-              {["tech", "macro", "ai", "broadcast"].map(tab => (
-                <button
-                  key={tab}
-                  onClick={() => setActiveTab(tab)}
-                  className={`pb-2 text-sm font-mono uppercase tracking-widest ${activeTab === tab ? 'text-white border-b-2 border-[#00F0FF]' : 'text-gray-600 hover:text-gray-400'}`}
-                >
-                  {tab === 'tech' ? 'Titan Tech' : tab === 'ai' ? 'Intelligence' : tab === 'broadcast' ? 'Signals & Broadcast' : tab}
-                </button>
-              ))}
-            </div>
+        const series = useMemo(() => genSeries({{ ticker, tf, points: 160 }}), [ticker, tf]);
 
-            {/* TAB CONTENT */}
-            <div className="min-h-[500px]">
-              {activeTab === 'tech' && (
-                <div className="space-y-6 animate-in fade-in duration-500">
-                  <PriceChart data={data} />
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <EntropyChart data={data} />
-                    <FluxChart data={data} />
+        const kpis = useMemo(() => {{
+          const last = series.last ?? 0;
+          const changePct = series.changePct ?? 0;
+          const regime =
+            Math.abs(changePct) < 0.15 ? "Neutral" : changePct > 0 ? "Bull" : "Bear";
+          const conf =
+            regime === "Neutral" ? 54 :
+            regime === "Bull" ? 71 : 69;
+
+          return {{
+            last,
+            changePct,
+            regime,
+            conf,
+            volatility: (0.8 + (Math.abs(changePct) * 2)).toFixed(2),
+            trend: changePct > 0 ? "Uptrend" : changePct < 0 ? "Downtrend" : "Range",
+          }};
+        }}, [series]);
+
+        const signals = useMemo(() => {{
+          const isBull = kpis.regime === "Bull";
+          const isBear = kpis.regime === "Bear";
+          return [
+            {{
+              ts: "Most Recent",
+              side: isBull ? "LONG" : isBear ? "SHORT" : "WAIT",
+              reason: "Composite regime + momentum proxy (mock)",
+              conf: `${{kpis.conf}}%`,
+              level: isBull ? "Buy pullbacks" : isBear ? "Sell rallies" : "Hold levels",
+            }},
+            {{
+              ts: "Prev",
+              side: isBull ? "LONG" : isBear ? "SHORT" : "WAIT",
+              reason: "Trend state + volatility gate (mock)",
+              conf: `${{Math.max(50, kpis.conf - 7)}}%`,
+              level: "Key S/R zones",
+            }},
+          ];
+        }}, [kpis]);
+
+        const logs = useMemo(
+          () => [
+            `[BOOT] UI loaded`,
+            `[STATE] ticker=${{ticker}} tf=${{tf}}`,
+            `[DATA] series_points=${{series.data.length}}`,
+            `[SIGNALS] generated=${{signals.length}}`,
+          ],
+          [ticker, tf, series.data.length, signals.length]
+        );
+
+        return (
+          <div className="min-h-screen">
+            {/* Top Header */}
+            <div className="sticky top-0 z-30 bg-[#050505]/80 backdrop-blur border-b border-white/5">
+              <div className="max-w-[1600px] mx-auto px-4 py-3 flex items-center justify-between gap-4">
+                <div className="flex items-center gap-3 min-w-0">
+                  <div className="w-10 h-10 rounded-2xl glass-panel ring-neon flex items-center justify-center font-mono text-white/90">
+                    AQ
+                  </div>
+                  <div className="min-w-0">
+                    <div className="font-mono text-white/85 tracking-wide neon truncate">
+                      Axiom Quantitative <span className="text-white/35">|</span> Titan Edition
+                    </div>
+                    <div className="text-xs text-white/45 truncate">
+                      Streamlit embed • React + Tailwind + Recharts
+                    </div>
                   </div>
                 </div>
-              )}
 
-              {activeTab === 'macro' && (
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                  <div className="glass-panel p-6 rounded">
-                    <h3 className="text-[#00F0FF] text-lg font-bold mb-4">Fundamentals</h3>
-                    <div className="space-y-3 font-mono text-sm">
-                      <div className="flex justify-between"><span>Market Cap</span><span className="text-white">{fundamentals.marketCap}</span></div>
-                      <div className="flex justify-between"><span>P/E Ratio</span><span className="text-white">{fundamentals.peRatio}</span></div>
-                      <div className="flex justify-between"><span>Rev Growth</span><span className="text-[#00E676]">{fundamentals.revGrowth}</span></div>
-                      <div className="border-t border-[#333] pt-2 text-gray-400 text-xs italic">
-                        {fundamentals.summary}
+                <div className="flex items-center gap-2">
+                  <Select value={ticker} onChange={setTicker} options={TICKERS} />
+                  <Select value={tf} onChange={setTf} options={TIMEFRAMES} />
+                  <Button onClick={() => alert("Mock refresh — wire this to your data fetch later.")}>
+                    Refresh
+                  </Button>
+                </div>
+              </div>
+            </div>
+
+            <div className="max-w-[1600px] mx-auto px-4 py-4 grid grid-cols-12 gap-4">
+              {/* Sidebar */}
+              <aside className="col-span-12 lg:col-span-2">
+                <div className="glass-panel ring-neon rounded-2xl p-3">
+                  <div className="font-mono text-xs text-white/55 mb-2">NAV</div>
+                  <nav className="flex lg:flex-col gap-2 flex-wrap">
+                    {NAV.map((n) => (
+                      <button
+                        key={n.id}
+                        onClick={() => setActive(n.id)}
+                        className={clsx(
+                          "text-left font-mono text-sm rounded-xl px-3 py-2 border transition",
+                          active === n.id
+                            ? "bg-white/7 border-white/20 text-white/90"
+                            : "bg-transparent border-white/10 text-white/65 hover:border-white/20 hover:bg-white/5"
+                        )}
+                      >
+                        {n.label}
+                      </button>
+                    ))}
+                  </nav>
+
+                  <div className="mt-4 pt-3 border-t border-white/5">
+                    <div className="font-mono text-xs text-white/55 mb-2">STATUS</div>
+                    <div className="flex items-center justify-between gap-2">
+                      <Chip>CONNECTED</Chip>
+                      <Chip>MOCK DATA</Chip>
+                    </div>
+                  </div>
+                </div>
+              </aside>
+
+              {/* Main */}
+              <main className="col-span-12 lg:col-span-10 space-y-4">
+                <TickerBanner ticker={ticker} tf={tf} last={kpis.last} changePct={kpis.changePct} />
+
+                {/* KPI Row */}
+                <div className="grid grid-cols-12 gap-4">
+                  <Panel className="col-span-12 md:col-span-3" title="Regime" subtitle="Market state (mock)">
+                    <div className="mt-1 flex items-end justify-between">
+                      <div className="font-mono text-2xl text-white/90">{kpis.regime}</div>
+                      <Chip>{kpis.trend}</Chip>
+                    </div>
+                    <div className="mt-2 text-xs text-white/45">
+                      Hook this to your real regime engine when ready.
+                    </div>
+                  </Panel>
+
+                  <Panel className="col-span-12 md:col-span-3" title="Confidence" subtitle="Composite score (mock)">
+                    <div className="mt-1 flex items-end justify-between">
+                      <div className="font-mono text-2xl text-white/90">{kpis.conf}%</div>
+                      <Chip>GATED</Chip>
+                    </div>
+                    <div className="mt-2 text-xs text-white/45">
+                      Add bull/bear thresholds & guards here.
+                    </div>
+                  </Panel>
+
+                  <Panel className="col-span-12 md:col-span-3" title="Volatility" subtitle="Proxy (mock)">
+                    <div className="mt-1 flex items-end justify-between">
+                      <div className="font-mono text-2xl text-white/90">{kpis.volatility}</div>
+                      <Chip>ATR-ish</Chip>
+                    </div>
+                    <div className="mt-2 text-xs text-white/45">
+                      Replace with ATR/realized vol.
+                    </div>
+                  </Panel>
+
+                  <Panel className="col-span-12 md:col-span-3" title="Last Price" subtitle="Latest point">
+                    <div className="mt-1 flex items-end justify-between">
+                      <div className="font-mono text-2xl text-white/90">{kpis.last.toFixed(2)}</div>
+                      <Chip>
+                        {kpis.changePct >= 0 ? "▲" : "▼"} {kpis.changePct.toFixed(2)}%
+                      </Chip>
+                    </div>
+                    <div className="mt-2 text-xs text-white/45">
+                      Feed this from your provider (yfinance/binance/etc).
+                    </div>
+                  </Panel>
+                </div>
+
+                {/* Content Tabs */}
+                {(active === "overview" || active === "charts") ? (
+                  <div className="grid grid-cols-12 gap-4">
+                    <Panel
+                      className="col-span-12 lg:col-span-8"
+                      title="Price (Mock Series)"
+                      subtitle="Wired to ticker/timeframe selection"
+                      right={<Chip>{ticker}</Chip>}
+                    >
+                      <div className="h-[360px]">
+                        <ResponsiveContainer width="100%" height="100%">
+                          <AreaChart data={series.data} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
+                            <CartesianGrid stroke="rgba(255,255,255,0.06)" strokeDasharray="4 4" />
+                            <XAxis
+                              dataKey="time"
+                              tick={{ fill: "rgba(255,255,255,0.45)", fontSize: 11, fontFamily: "Roboto Mono" }}
+                              tickLine={false}
+                              axisLine={{ stroke: "rgba(255,255,255,0.08)" }}
+                              minTickGap={24}
+                            />
+                            <YAxis
+                              tick={{ fill: "rgba(255,255,255,0.45)", fontSize: 11, fontFamily: "Roboto Mono" }}
+                              tickLine={false}
+                              axisLine={{ stroke: "rgba(255,255,255,0.08)" }}
+                              width={56}
+                              domain={["auto", "auto"]}
+                            />
+                            <Tooltip content={<PriceTooltip />} />
+                            <Area
+                              type="monotone"
+                              dataKey="price"
+                              stroke="rgba(0,240,255,0.8)"
+                              fill="rgba(0,240,255,0.12)"
+                              strokeWidth={2}
+                              dot={false}
+                              activeDot={{ r: 3 }}
+                            />
+                          </AreaChart>
+                        </ResponsiveContainer>
+                      </div>
+
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        <Chip>EMA 50/200 (placeholder)</Chip>
+                        <Chip>RSI (placeholder)</Chip>
+                        <Chip>MACD (placeholder)</Chip>
+                        <Chip>ATR (placeholder)</Chip>
+                      </div>
+                    </Panel>
+
+                    <Panel className="col-span-12 lg:col-span-4" title="Signals" subtitle="Mock structure ready">
+                      <div className="space-y-2">
+                        {signals.map((s, i) => (
+                          <div key={i} className="rounded-xl border border-white/10 bg-white/3 p-3">
+                            <div className="flex items-center justify-between gap-2">
+                              <div className="font-mono text-sm text-white/85">{s.side}</div>
+                              <Chip>{s.conf}</Chip>
+                            </div>
+                            <div className="text-xs text-white/45 mt-1">{s.reason}</div>
+                            <div className="text-xs text-white/60 mt-2 font-mono">Level: {s.level}</div>
+                          </div>
+                        ))}
+                      </div>
+
+                      <div className="mt-3 flex gap-2">
+                        <Button variant="secondary" onClick={() => alert("Mock export: CSV")}>Export CSV</Button>
+                        <Button variant="secondary" onClick={() => alert("Mock export: Markdown")}>Export MD</Button>
+                      </div>
+                    </Panel>
+                  </div>
+                ) : null}
+
+                {active === "signals" ? (
+                  <Panel title="Signals Table" subtitle="Mock table ready for real engine output">
+                    <div className="overflow-auto rounded-xl border border-white/10">
+                      <table className="w-full text-sm">
+                        <thead className="bg-white/3">
+                          <tr className="text-left">
+                            <th className="p-3 font-mono text-xs text-white/60">Time</th>
+                            <th className="p-3 font-mono text-xs text-white/60">Side</th>
+                            <th className="p-3 font-mono text-xs text-white/60">Confidence</th>
+                            <th className="p-3 font-mono text-xs text-white/60">Reason</th>
+                            <th className="p-3 font-mono text-xs text-white/60">Level</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {signals.map((s, i) => (
+                            <tr key={i} className="border-t border-white/5 hover:bg-white/2">
+                              <td className="p-3 text-white/70 font-mono text-xs">{s.ts}</td>
+                              <td className="p-3 text-white/85 font-mono">{s.side}</td>
+                              <td className="p-3 text-white/70 font-mono">{s.conf}</td>
+                              <td className="p-3 text-white/60">{s.reason}</td>
+                              <td className="p-3 text-white/60">{s.level}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </Panel>
+                ) : null}
+
+                {active === "scanner" ? (
+                  <Panel title="Scanner" subtitle="Wire to your watchlists + filters">
+                    <div className="text-white/55 text-sm">
+                      Placeholder scanner panel. Add:
+                      <ul className="list-disc ml-5 mt-2 space-y-1 text-white/45">
+                        <li>Search + multi-select universe</li>
+                        <li>Rules engine (trend/vol/RSI/regime)</li>
+                        <li>Batch compute + ranked output</li>
+                      </ul>
+                    </div>
+                  </Panel>
+                ) : null}
+
+                {active === "ai" ? (
+                  <Panel title="AI" subtitle="Drop-in OpenAI/Gemini analysis panel">
+                    <div className="grid grid-cols-12 gap-4">
+                      <div className="col-span-12 lg:col-span-7">
+                        <div className="rounded-xl border border-white/10 bg-white/3 p-3">
+                          <div className="font-mono text-xs text-white/60 mb-2">Prompt</div>
+                          <textarea
+                            className="w-full h-40 bg-transparent outline-none font-mono text-sm text-white/75"
+                            defaultValue={`Analyze ${ticker} on ${tf}. Provide: regime, key levels, invalidation, and a clean trade plan.`}
+                          ></textarea>
+                        </div>
+                        <div className="mt-3 flex gap-2">
+                          <Button onClick={() => alert("Mock AI run — wire to your API calls.")}>Run AI</Button>
+                          <Button variant="secondary" onClick={() => alert("Mock send to Telegram")}>
+                            Send to Telegram
+                          </Button>
+                        </div>
+                      </div>
+                      <div className="col-span-12 lg:col-span-5">
+                        <div className="rounded-xl border border-white/10 bg-white/3 p-3 h-full">
+                          <div className="font-mono text-xs text-white/60 mb-2">Output</div>
+                          <div className="text-sm text-white/55 leading-relaxed">
+                            Mock AI output area. When wired, render:
+                            <ul className="list-disc ml-5 mt-2 space-y-1 text-white/45">
+                              <li>Structured bullets</li>
+                              <li>Signal summary</li>
+                              <li>Risk parameters</li>
+                              <li>Markdown export</li>
+                            </ul>
+                          </div>
+                        </div>
                       </div>
                     </div>
-                  </div>
-                  <div className="glass-panel p-6 rounded">
-                    <h3 className="text-[#D500F9] text-lg font-bold mb-4">Fibonacci Targets</h3>
-                    <div className="space-y-3 font-mono text-sm">
-                      <div className="flex justify-between text-red-400"><span>Smart Stop</span><span>${fibs?.smart_stop.toFixed(2)}</span></div>
-                      <div className="flex justify-between text-yellow-400"><span>TP1</span><span>${fibs?.tp1.toFixed(2)}</span></div>
-                      <div className="flex justify-between text-green-400"><span>TP2</span><span>${fibs?.tp2.toFixed(2)}</span></div>
-                      <div className="flex justify-between text-[#00E676]"><span>TP3</span><span>${fibs?.tp3.toFixed(2)}</span></div>
-                    </div>
-                  </div>
-                </div>
-              )}
+                  </Panel>
+                ) : null}
 
-              {activeTab === 'ai' && (
-                <div className="glass-panel p-6 rounded max-w-2xl mx-auto">
-                  <h3 className="text-white font-bold mb-4 flex items-center gap-2">
-                    <span className="text-xl">🧠</span> AI Intelligence
-                  </h3>
-                  <select className="w-full bg-[#0a0a0a] border border-[#333] p-3 rounded mb-4 text-sm text-gray-300 outline-none focus:border-[#00F0FF]">
-                    <option>Comprehensive Analysis</option>
-                    <option>Technical Breakdown</option>
-                    <option>Risk Assessment</option>
-                  </select>
-                  <button className="w-full bg-[#00F0FF] text-black font-bold p-3 rounded hover:bg-[#00c0cc] transition mb-4">
-                    RUN ANALYSIS (OPENAI)
-                  </button>
-                  <div className="bg-[#0a0a0a] border border-[#333] p-4 rounded min-h-[200px] text-xs font-mono text-gray-400">
-                    Analyzing {selectedTicker} using God Mode algorithms...
-                    <br />
-                    &gt; Checking CHEDO Entropy... Stable.
-                    <br />
-                    &gt; Flux Vector... Bullish Divergence detected.
-                    <br />
-                    &gt; Calculating SMC Order Blocks... Done.
-                  </div>
-                </div>
-              )}
-
-              {activeTab === 'broadcast' && (
-                <div className="space-y-6">
-                  <VolumeProfileChart data={profile} poc={poc} />
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                    <div className="glass-panel p-6 rounded border-l-4 border-[#00F0FF]">
-                      <div className="flex justify-between items-start mb-4">
-                        <div>
-                          <h3 className="text-white font-bold flex items-center gap-2">
-                            <span>📡 Signal Generator</span>
-                            <span className={`text-[10px] font-mono bg-[#111] px-2 py-1 rounded font-bold ${signalBias === 'LONG' ? 'text-[#00E676]' : signalBias === 'SHORT' ? 'text-[#FF1744]' : 'text-gray-500'}`}>
-                              {signalBias} BIAS
-                            </span>
-                          </h3>
-                          <div className="mt-2 flex items-center gap-2 text-xs">
-                            <span className="text-gray-500">CONFIDENCE</span>
-                            <div className="w-24 h-1.5 bg-[#111] rounded-full overflow-hidden">
-                              <div
-                                className="h-full bg-gradient-to-r from-[#00F0FF] to-[#0055FF] transition-all duration-500"
-                                style={{ width: `${confidenceScore}%` }}
-                              ></div>
-                            </div>
-                            <span className="text-[#00F0FF] font-mono">{confidenceScore}%</span>
+                {active === "settings" ? (
+                  <Panel title="Settings" subtitle="Keys + integrations go here">
+                    <div className="grid grid-cols-12 gap-4">
+                      <div className="col-span-12 lg:col-span-6 rounded-xl border border-white/10 bg-white/3 p-3">
+                        <div className="font-mono text-xs text-white/60 mb-2">Integrations</div>
+                        <div className="space-y-2 text-sm text-white/55">
+                          <div className="flex items-center justify-between gap-2">
+                            <span>TradingView Banner</span>
+                            <Chip>ENABLED (UI)</Chip>
+                          </div>
+                          <div className="flex items-center justify-between gap-2">
+                            <span>Telegram</span>
+                            <Chip>PLACEHOLDER</Chip>
+                          </div>
+                          <div className="flex items-center justify-between gap-2">
+                            <span>X.com Broadcast</span>
+                            <Chip>PLACEHOLDER</Chip>
                           </div>
                         </div>
                       </div>
 
-                      <div className="mb-4">
-                        <label className="text-xs text-gray-500 uppercase block mb-1">Report Type</label>
-                        <select
-                          value={selectedReportType}
-                          onChange={(e) => setSelectedReportType(e.target.value as ReportType)}
-                          className="w-full bg-[#0a0a0a] border border-[#333] p-2 rounded text-sm text-[#00F0FF] outline-none focus:border-[#00F0FF]"
-                        >
-                          {REPORT_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
-                        </select>
-                      </div>
-
-                      <button
-                        onClick={handleGenerateReport}
-                        className="w-full bg-[#111] border border-[#333] text-white text-xs font-bold p-2 rounded hover:border-[#00F0FF] transition mb-4 uppercase tracking-widest hover:bg-[#1a1a1a]"
-                      >
-                        ⚡ Generate Signal Report
-                      </button>
-
-                      <div className="relative group">
-                        <textarea
-                          className="w-full bg-[#0a0a0a] border border-[#333] p-3 rounded mb-4 text-xs text-[#00F0FF] font-mono h-64 focus:border-[#00F0FF] outline-none leading-relaxed custom-scrollbar"
-                          value={broadcastMsg}
-                          onChange={(e) => setBroadcastMsg(e.target.value)}
-                          placeholder={`Generate a report above or type a custom signal...`}
-                        />
-                        {broadcastMsg && (
-                          <button
-                            onClick={handleCopy}
-                            className="absolute top-2 right-2 bg-[#222] hover:bg-[#333] text-white text-[10px] px-2 py-1 rounded opacity-0 group-hover:opacity-100 transition"
-                          >
-                            COPY
-                          </button>
-                        )}
-                      </div>
-
-                      {/* ✅ NEW: Telegram status feedback */}
-                      {(telegramStatus !== "idle" || telegramError) && (
-                        <div className={`mb-3 text-[11px] font-mono p-2 rounded border ${
-                          telegramStatus === "sending" ? "border-[#00F0FF]/40 text-[#00F0FF]" :
-                          telegramStatus === "sent" ? "border-[#00E676]/40 text-[#00E676]" :
-                          telegramStatus === "error" ? "border-[#FF1744]/40 text-[#FF1744]" :
-                          "border-[#333] text-gray-400"
-                        } bg-[#080808]`}>
-                          {telegramStatus === "sending" && "SENDING TO TELEGRAM..."}
-                          {telegramStatus === "sent" && "SENT ✅"}
-                          {telegramStatus === "error" && `ERROR ❌: ${telegramError}`}
+                      <div className="col-span-12 lg:col-span-6 rounded-xl border border-white/10 bg-white/3 p-3">
+                        <div className="font-mono text-xs text-white/60 mb-2">UI</div>
+                        <div className="text-sm text-white/55">
+                          You can add theme toggles, density, table sizing, etc.
                         </div>
-                      )}
-
-                      <button
-                        onClick={handleBroadcast}
-                        disabled={telegramStatus === "sending"}
-                        className={`w-full bg-gradient-to-r from-[#00F0FF] to-[#0055FF] text-white font-bold p-3 rounded hover:opacity-90 transition shadow-[0_0_15px_rgba(0,240,255,0.3)]
-                          ${telegramStatus === "sending" ? "opacity-60 cursor-not-allowed" : ""}`}
-                      >
-                        🚀 BROADCAST TO TELEGRAM
-                      </button>
-                    </div>
-
-                    <div className="glass-panel p-6 rounded flex flex-col">
-                      <h3 className="text-gray-400 font-bold mb-4 text-xs uppercase tracking-widest border-b border-[#222] pb-2 flex justify-between">
-                        <span>Broadcast Log</span>
-                        <span className="text-[#00F0FF]">{broadcastLog.length} SENT</span>
-                      </h3>
-                      <div className="space-y-4 flex-1 overflow-y-auto pr-2 custom-scrollbar bg-[#020202] p-2 rounded-inner shadow-inner">
-                        {broadcastLog.length === 0 && <div className="text-gray-600 text-sm italic text-center mt-20">No signals transmitted.</div>}
-                        {broadcastLog.map((log, i) => {
-                          const isBuy = log.message.includes("BUY") || log.message.includes("LONG") || log.message.includes("🟢");
-                          const isSell = log.message.includes("SELL") || log.message.includes("SHORT") || log.message.includes("🔴");
-                          const borderColor = isBuy ? "border-[#00E676]/30" : isSell ? "border-[#FF1744]/30" : "border-[#333]";
-
-                          return (
-                            <div key={i} className={`bg-[#0a0a0a] border ${borderColor} p-3 rounded-lg text-xs hover:bg-[#111] transition group relative max-w-[90%] ml-auto`}>
-                              <div className="flex justify-between text-gray-500 mb-1 font-mono uppercase tracking-tight text-[10px]">
-                                <span className="font-bold text-gray-300">{log.name}</span>
-                                <span>{log.scheduleTime}</span>
-                              </div>
-                              <div className="text-gray-400 font-mono whitespace-pre-wrap leading-relaxed opacity-90">
-                                {log.message.slice(0, 100)}...
-                              </div>
-                              <div className="absolute -right-2 top-3 w-0 h-0 border-t-[6px] border-t-transparent border-l-[8px] border-l-[#0a0a0a] border-b-[6px] border-b-transparent"></div>
-                            </div>
-                          );
-                        })}
                       </div>
                     </div>
-                  </div>
-                </div>
-              )}
+                  </Panel>
+                ) : null}
+
+                {active === "logs" ? (
+                  <Panel title="Logs" subtitle="System / pipeline logs">
+                    <div className="rounded-xl border border-white/10 bg-black/30 p-3 font-mono text-xs text-white/65 space-y-1">
+                      {logs.map((l, i) => (
+                        <div key={i}>{l}</div>
+                      ))}
+                    </div>
+                  </Panel>
+                ) : null}
+              </main>
             </div>
           </div>
-        </div>
-      </div>
-    </div>
-  );
-}
+        );
+      }}
 
-const MetricCard = ({ label, value, sub, color }: { label: string, value: string, sub: string, color: string }) => (
-  <div className="bg-[#ffffff05] border-l-2 border-[#333] hover:border-[#00F0FF] hover:bg-[#ffffff10] transition-all p-4 backdrop-blur-sm group">
-    <div className="text-gray-500 text-[10px] tracking-widest uppercase mb-1 font-bold">{label}</div>
-    <div className={`text-2xl font-light ${color} font-mono mb-1`}>{value}</div>
-    <div className="text-xs text-gray-600 group-hover:text-gray-400">{sub}</div>
-  </div>
-);
+      createRoot(document.getElementById("root")).render(<App />);
+    </script>
+  </body>
+</html>
+"""
 
-/**
- * ✅ NEW: TradingView widget banner that updates with the selected symbol.
- * - Additive: no dependency on your other components.
- * - Uses TradingView "Symbol Overview" widget (simple + fast).
- * - If you prefer "Advanced Chart", say so and I’ll swap widget type without breaking anything.
- */
-const TradingViewTickerBanner = ({ symbol }: { symbol: string }) => {
-  const containerRef = useRef<HTMLDivElement | null>(null);
+# ==========================================
+# STREAMLIT RENDER
+# ==========================================
+st.title("👁️ Axiom Quantitative | Titan Edition (Embedded UI)")
+st.caption("This Streamlit app embeds your React/Tailwind/Recharts UI in an iframe.")
 
-  useEffect(() => {
-    if (!containerRef.current) return;
-
-    // Clear previous widget (additive, avoids stacking multiple scripts)
-    containerRef.current.innerHTML = "";
-
-    const script = document.createElement("script");
-    script.src = "https://s3.tradingview.com/external-embedding/embed-widget-symbol-overview.js";
-    script.type = "text/javascript";
-    script.async = true;
-
-    // TradingView often expects symbols like "BINANCE:BTCUSDT" or "NASDAQ:AAPL".
-    // We keep YOUR symbol intact to avoid assumptions.
-    // If you want automatic mapping per asset class (BTC-USD -> COINBASE:BTCUSD etc.),
-    // we can add a mapping table in constants.
-    script.innerHTML = JSON.stringify({
-      symbols: [[symbol]],
-      chartOnly: false,
-      width: "100%",
-      height: 180,
-      locale: "en",
-      colorTheme: "dark",
-      autosize: true,
-      showVolume: true,
-      showMA: true,
-      hideDateRanges: false,
-      hideMarketStatus: false,
-      hideSymbolLogo: false,
-      scalePosition: "right",
-      scaleMode: "Normal",
-      fontFamily: "Trebuchet MS, sans-serif",
-      fontSize: "10",
-      noTimeScale: false,
-      valuesTracking: "1",
-      changeMode: "price-and-percent",
-      chartType: "area",
-      maLineColor: "#00F0FF",
-      maLineWidth: 1,
-      maLength: 20,
-      lineWidth: 2
-    });
-
-    containerRef.current.appendChild(script);
-  }, [symbol]);
-
-  return (
-    <div className="px-4 py-3">
-      <div className="flex items-center justify-between mb-2">
-        <div className="text-xs uppercase tracking-widest text-gray-500 font-mono">
-          Live Chart Banner
-        </div>
-        <div className="text-xs font-mono text-[#00F0FF]">
-          {symbol}
-        </div>
-      </div>
-      <div
-        ref={containerRef}
-        className="bg-[#050505] border border-[#111] rounded-lg overflow-hidden"
-      />
-    </div>
-  );
-};
-
-export default App;
+components.html(HTML_APP, height=iframe_height, scrolling=True)
