@@ -837,7 +837,8 @@ if st.session_state.view_mode == "notes":
                     if st.button("← Back", use_container_width=True):
                         st.session_state.active_id = None
                         st.rerun()
-                return
+                # Stop execution here if locked
+                st.stop()
             
             # Editor Header
             col_title, col_actions = st.columns([3, 1])
