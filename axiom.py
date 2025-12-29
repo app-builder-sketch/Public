@@ -3,7 +3,7 @@
 AXIOM — TITAN EDITION (Streamlit Fixed Build)
 ------------------------------------------------
 FIX APPLIED:
-- Replaced invalid '//' comments with Python '#' comments.
+- Replaced all '//' (JavaScript comments) with '#' (Python comments).
 - Fixed SyntaxError at line 28.
 - Verified all session state and sidebar logic.
 
