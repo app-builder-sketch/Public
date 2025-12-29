@@ -31,6 +31,7 @@ def get_clean_data(ticker, period, interval):
     """Downloads and flattens data to prevent MultiIndex errors."""
     try:
         df = yf.download(ticker, period=period, interval=interval, progress=False)
+        # CRITICAL FIX: Flatten MultiIndex columns
         if isinstance(df.columns, pd.MultiIndex):
             df.columns = df.columns.get_level_values(0)
         return df
@@ -44,10 +45,13 @@ def get_macro_data():
         "SPY": "SPY", "TLT": "TLT", "GLD": "GC=F", 
         "BTC": "BTC-USD", "ETH": "ETH-USD", "VIX": "^VIX", "DXY": "DX-Y.NYB"
     }
-    data = yf.download(list(tickers.values()), period="5d", interval="1d", progress=False)['Close']
-    if isinstance(data.columns, pd.MultiIndex):
-        data.columns = data.columns.get_level_values(0)
-    return data
+    try:
+        data = yf.download(list(tickers.values()), period="5d", interval="1d", progress=False)['Close']
+        if isinstance(data.columns, pd.MultiIndex):
+            data.columns = data.columns.get_level_values(0)
+        return data
+    except:
+        return pd.DataFrame()
 
 # ==========================================
 # 3. UNIVERSAL LOGIC ENGINE (ALL INDICATORS)
@@ -90,6 +94,7 @@ class UniversalParamountEngine:
         kc_range = atr(df, 20)
         upper_kc, lower_kc = basis + (kc_range * 1.5), basis - (kc_range * 1.5)
         
+        # This was the line causing the error; fixed by the flatten logic in get_clean_data
         df['Squeeze_On'] = (lower_bb > lower_kc) & (upper_bb < upper_kc)
         # Linear Regression Momentum Proxy
         df['Sqz_Mom'] = (df['Close'] - ((df['High'].rolling(20).max() + df['Low'].rolling(20).min() + basis)/3)).rolling(20).mean()
@@ -205,6 +210,9 @@ st.markdown("""
 <style>
     .stApp { background-color: #050505; color: #e0e0e0; font-family: 'Roboto Mono'; }
     div[data-testid="stMetric"] { background: rgba(0, 240, 255, 0.05); border-left: 4px solid #00F0FF; padding: 10px; }
+    .stTabs [data-baseweb="tab-list"] { border-bottom: 1px solid #333; }
+    .stTabs [data-baseweb="tab"] { color: #888; }
+    .stTabs [aria-selected="true"] { color: #00F0FF; border-bottom-color: #00F0FF; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -223,7 +231,7 @@ with st.sidebar:
 
 if st.button(f"EXECUTE FULL ANALYSIS"):
     with st.spinner(f"Running Universal Engine for {asset}..."):
-        # 1. Data
+        # 1. Data (Using the FIXED Clean Ingestion)
         df = get_clean_data(asset, "1y", interval)
         macro = get_macro_data()
         
