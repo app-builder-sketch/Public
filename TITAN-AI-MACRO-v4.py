@@ -21,7 +21,7 @@ def inject_terminal_css():
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Roboto+Mono:wght@400;700&family=Inter:wght@300;400;700&display=swap');
         .stApp { background-color: #050505; color: #e0e0e0; font-family: 'Inter', sans-serif; }
-        
+
         /* Glassmorphism Metric Cards */
         div[data-testid="stMetric"] {
             background: rgba(255, 255, 255, 0.02);
@@ -29,7 +29,7 @@ def inject_terminal_css():
             backdrop-filter: blur(15px);
             border-radius: 4px; padding: 20px;
         }
-        
+
         /* Side-Car Analysis Styling */
         .analysis-box {
             background: rgba(0, 240, 255, 0.03);
@@ -41,7 +41,7 @@ def inject_terminal_css():
         .analysis-title { color: #00F0FF; font-family: 'Roboto Mono'; font-size: 1.2rem; margin-bottom: 15px; font-weight: bold; }
         .analysis-text { color: #aaa; line-height: 1.6; font-size: 0.95rem; }
         .highlight { color: #fff; font-weight: bold; }
-        
+
         /* Buttons & Tabs */
         .stTabs [data-baseweb="tab-list"] { background-color: transparent; border-bottom: 1px solid #222; }
         .stTabs [aria-selected="true"] { color: #00F0FF; border-bottom: 2px solid #00F0FF; }
@@ -49,47 +49,26 @@ def inject_terminal_css():
     """, unsafe_allow_html=True)
 
 # ==========================================
-# 1B. SECRETS HELPERS (ROBUST + SAFE DIAGNOSTICS)
+# 1B. SECRETS HELPERS (MATCH YOUR EXACT KEYS)
 # ==========================================
-def _safe_get_nested(secrets_obj, path):
+def get_secret_flat(key: str) -> tuple[str, bool]:
     """
-    Safely traverse st.secrets using a list/tuple path like ("openai","api_key").
-    Returns (value, True) if found and truthy, else ("", False).
+    Reads a flat st.secrets key like st.secrets["OPENAI_API_KEY"].
+    Returns (value, found_bool). Treats empty string as not found.
     """
     try:
-        cur = secrets_obj
-        for k in path:
-            cur = cur[k]
-        if cur is None:
+        v = st.secrets[key]
+        if v is None:
             return "", False
-        cur_s = str(cur).strip()
-        return (cur_s, True) if cur_s else ("", False)
+        v = str(v).strip()
+        return (v, True) if v else ("", False)
     except Exception:
         return "", False
 
-def secret_resolve(*candidate_paths):
+def secrets_diagnostics(required: dict):
     """
-    Try multiple candidate paths against st.secrets.
-    Each candidate can be:
-      - tuple/list path: ("openai","api_key")
-      - str key: "OPENAI_API_KEY"
-    Returns (value, found_bool, matched_path_repr)
-    """
-    for cand in candidate_paths:
-        if isinstance(cand, (list, tuple)):
-            v, ok = _safe_get_nested(st.secrets, cand)
-            if ok:
-                return v, True, "->".join(map(str, cand))
-        else:
-            v, ok = _safe_get_nested(st.secrets, (cand,))
-            if ok:
-                return v, True, str(cand)
-    return "", False, ""
-
-def secrets_diagnostics(required_checks):
-    """
-    required_checks: dict[label] = (value, found, matched_path)
-    Displays safe diagnostics (no values).
+    required: dict[label] = (found_bool, key_name)
+    Safe: shows keys and presence only (no secret values).
     """
     with st.expander("🔐 Secrets Diagnostics (safe — no values shown)", expanded=False):
         try:
@@ -100,17 +79,17 @@ def secrets_diagnostics(required_checks):
         st.code(", ".join(top_keys) if top_keys else "(none detected)")
 
         rows = []
-        for label, (val, found, matched) in required_checks.items():
+        for label, (found, key_name) in required.items():
             rows.append({
                 "Secret": label,
+                "Key": key_name,
                 "Present": "✅" if found else "❌",
-                "Matched Path": matched if matched else "(not found)"
             })
-        st.dataframe(pd.DataFrame(rows), use_container_width=True, height=180)
+        st.dataframe(pd.DataFrame(rows), use_container_width=True, height=160)
 
         st.caption(
-            "If nothing is detected: locally ensure `.streamlit/secrets.toml` exists next to your app, "
-            "or on Streamlit Cloud set secrets in the app settings."
+            "If none are detected: locally ensure `.streamlit/secrets.toml` exists in the `.streamlit/` folder "
+            "next to your app entry file. On Streamlit Cloud: set secrets in the app settings."
         )
 
 # ==========================================
@@ -401,40 +380,24 @@ def main():
     with st.sidebar:
         st.header("⚙️ TERMINAL CONTROL")
 
-        use_secrets = st.toggle("Use st.secrets (recommended)", value=False)
+        use_secrets = st.toggle("Use st.secrets (your flat keys)", value=True)
 
-        # Resolve secrets using multiple candidate keys (nested and flat)
-        openai_val, openai_found, openai_match = secret_resolve(
-            ("openai", "api_key"),
-            "OPENAI_API_KEY",
-            "openai_api_key",
-            "openai-key",
-        )
-        tg_token_val, tg_token_found, tg_token_match = secret_resolve(
-            ("telegram", "bot_token"),
-            "TELEGRAM_BOT_TOKEN",
-            "telegram_bot_token",
-            "telegram.bot_token",
-        )
-        tg_chat_val, tg_chat_found, tg_chat_match = secret_resolve(
-            ("telegram", "chat_id"),
-            "TELEGRAM_CHAT_ID",
-            "telegram_chat_id",
-            "telegram.chat_id",
-        )
+        # EXACT keys from your secrets.toml
+        openai_val, openai_found = get_secret_flat("OPENAI_API_KEY")
+        tg_token_val, tg_token_found = get_secret_flat("TELEGRAM_TOKEN")
+        tg_chat_val, tg_chat_found = get_secret_flat("TELEGRAM_CHAT_ID")
 
-        # Safe diagnostics panel (no values)
         secrets_diagnostics({
-            "OpenAI API Key": (openai_val, openai_found, openai_match),
-            "Telegram Bot Token": (tg_token_val, tg_token_found, tg_token_match),
-            "Telegram Chat ID": (tg_chat_val, tg_chat_found, tg_chat_match),
+            "OpenAI API Key": (openai_found, "OPENAI_API_KEY"),
+            "Telegram Token": (tg_token_found, "TELEGRAM_TOKEN"),
+            "Telegram Chat ID": (tg_chat_found, "TELEGRAM_CHAT_ID"),
         })
 
         # OpenAI Key + APO
         if use_secrets:
             api_key = openai_val
             if not api_key:
-                st.warning("OpenAI key not found in st.secrets. Enter manually below.")
+                st.warning("OPENAI_API_KEY not found (or empty) in st.secrets. Enter manually below.")
                 api_key = st.text_input("OpenAI Key", type="password")
         else:
             api_key = st.text_input("OpenAI Key", type="password")
@@ -469,12 +432,12 @@ def main():
 
         st.divider()
 
-        # Telegram credentials
+        # Telegram credentials (EXACT keys)
         if use_secrets:
             tg_token = tg_token_val
             tg_chat = tg_chat_val
             if not tg_token or not tg_chat:
-                st.warning("Telegram secrets not found in st.secrets. Enter manually below.")
+                st.warning("TELEGRAM_TOKEN / TELEGRAM_CHAT_ID not found (or empty) in st.secrets. Enter manually below.")
                 tg_token = st.text_input("Telegram Bot Token", type="password", value=tg_token)
                 tg_chat = st.text_input("Telegram Chat ID", value=tg_chat)
         else:
@@ -490,7 +453,6 @@ def main():
     if not df.empty:
         df = AxiomEngine.calculate(df)
 
-        # APO params
         len_f, len_s = 21, 50
         apo_debug = ""
         if use_ai:
@@ -572,7 +534,7 @@ def main():
             with col_send:
                 if st.button("Send to Telegram"):
                     if not tg_token or not tg_chat:
-                        st.error("Missing Telegram credentials: provide Bot Token and Chat ID (or enable secrets mode with matching keys).")
+                        st.error("Missing Telegram credentials: TELEGRAM_TOKEN and/or TELEGRAM_CHAT_ID are empty/not loaded.")
                     else:
                         result = telegram_send(tg_token, tg_chat, msg, timeout_sec=10)
                         entry = {
