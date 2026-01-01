@@ -303,7 +303,7 @@ def render_tv_header(selected_ticker: str):
         {"proName": "AMEX:SPY", "title": "SPY"},
         {"proName": "NASDAQ:QQQ", "title": "QQQ"}
     ]
-               
+                
     config = {
         "symbols": symbols, 
         "colorTheme": "dark", 
@@ -1202,11 +1202,11 @@ def main():
         
         with col_m1:
             st.metric("CHEDO Entropy", f"{last['CHEDO']:.3f}", 
-                     delta=f"{df['CHEDO'].diff().iloc[-1]:.3f}" if not pd.isna(df['CHEDO'].diff().iloc[-1]) else None)
+                      delta=f"{df['CHEDO'].diff().iloc[-1]:.3f}" if not pd.isna(df['CHEDO'].diff().iloc[-1]) else None)
         
         with col_m2:
             st.metric("Apex Flux", f"{last['Flux']:.3f}", 
-                     delta=f"{df['Flux'].diff().iloc[-1]:.3f}" if not pd.isna(df['Flux'].diff().iloc[-1]) else None)
+                      delta=f"{df['Flux'].diff().iloc[-1]:.3f}" if not pd.isna(df['Flux'].diff().iloc[-1]) else None)
         
         with col_m3:
             if 'Vol_StdDev' in df.columns:
