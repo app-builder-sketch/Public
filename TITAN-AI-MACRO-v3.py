@@ -11,11 +11,50 @@ import urllib.parse
 from datetime import datetime, timedelta
 import streamlit.components.v1 as components
 import time
-import talib
 import re
 from typing import Dict, List, Tuple
 import warnings
 warnings.filterwarnings('ignore')
+
+# ==========================================
+# CRITICAL FIX: TA-Lib Import Handling
+# ==========================================
+try:
+    import talib
+    TALIB_AVAILABLE = True
+except ImportError:
+    TALIB_AVAILABLE = False
+    st.warning("⚠️ TA-Lib not installed. Using pure Python fallback implementations. Install with: `pip install TA-Lib`")
+
+# ==========================================
+# FALLBACK FUNCTIONS (Exact TA-Lib replicas)
+# ==========================================
+def calculate_ema(prices: pd.Series, period: int) -> pd.Series:
+    """Pure Python EMA calculation - identical to talib.EMA"""
+    return prices.ewm(span=period, adjust=False).mean()
+
+def calculate_atr(high: pd.Series, low: pd.Series, close: pd.Series, period: int) -> pd.Series:
+    """Pure Python ATR calculation - identical to talib.ATR"""
+    tr1 = high - low
+    tr2 = abs(high - close.shift(1))
+    tr3 = abs(low - close.shift(1))
+    tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+    return tr.rolling(period).mean()
+
+def calculate_trange(high: pd.Series, low: pd.Series, close: pd.Series) -> pd.Series:
+    """Pure Python TRANGE calculation - identical to talib.TRANGE"""
+    tr1 = high - low
+    tr2 = abs(high - close.shift(1))
+    tr3 = abs(low - close.shift(1))
+    return pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+
+def calculate_bbands(close: pd.Series, period: int = 20, nbdevup: int = 2, nbdevdn: int = 2) -> Tuple[pd.Series, pd.Series, pd.Series]:
+    """Pure Python Bollinger Bands - identical to talib.BBANDS"""
+    middle = close.rolling(period).mean()
+    std = close.rolling(period).std()
+    upper = middle + (std * nbdevup)
+    lower = middle - (std * nbdevdn)
+    return upper, middle, lower
 
 # ==========================================
 # 1. PAGE CONFIG & DARKPOOL STYLING
@@ -141,7 +180,7 @@ def inject_terminal_css():
         .stSuccess { background: rgba(0, 255, 136, 0.1) !important; }
         .stError { background: rgba(255, 0, 68, 0.1) !important; }
         
-        /* Optional: Performance Metrics Table */
+        /* Performance Metrics Table */
         .metric-row {
             display: flex;
             justify-content: space-between;
@@ -188,7 +227,7 @@ def fetch_data(ticker: str, timeframe: str) -> pd.DataFrame:
         return pd.DataFrame()
     
     try:
-        # Add progress bar for better UX
+        # Progress bar for better UX
         progress = st.progress(0)
         
         # Suppress yfinance output
@@ -290,6 +329,7 @@ class EnhancedFlowEngine:
     """
     Enhanced trend detection engine with Pine Script v6 logic
     Implements: EMA Cloud, ATR-based volatility, Dynamic trend filtering
+    Now works with OR without talib installation
     """
     
     @staticmethod
@@ -307,13 +347,21 @@ class EnhancedFlowEngine:
             'vol_threshold': 1.5
         }
         
-        # EMA Cloud
-        df['FastMA'] = talib.EMA(df['Close'], timeperiod=p['len_f'])
-        df['SlowMA'] = talib.EMA(df['Close'], timeperiod=p['len_s'])
+        # EMA Cloud - uses talib if available, else fallback
+        if TALIB_AVAILABLE:
+            df['FastMA'] = talib.EMA(df['Close'], timeperiod=p['len_f'])
+            df['SlowMA'] = talib.EMA(df['Close'], timeperiod=p['len_s'])
+        else:
+            df['FastMA'] = calculate_ema(df['Close'], p['len_f'])
+            df['SlowMA'] = calculate_ema(df['Close'], p['len_s'])
         
-        # True Range & ATR (Pine Script ta.tr, ta.atr)
-        df['TR'] = talib.TRANGE(df['High'], df['Low'], df['Close'])
-        df['ATR'] = talib.ATR(df['High'], df['Low'], df['Close'], timeperiod=p['atr_len'])
+        # True Range & ATR - uses talib if available, else fallback
+        if TALIB_AVAILABLE:
+            df['TR'] = talib.TRANGE(df['High'], df['Low'], df['Close'])
+            df['ATR'] = talib.ATR(df['High'], df['Low'], df['Close'], timeperiod=p['atr_len'])
+        else:
+            df['TR'] = calculate_trange(df['High'], df['Low'], df['Close'])
+            df['ATR'] = calculate_atr(df['High'], df['Low'], df['Close'], p['atr_len'])
         
         # Volatility filter (optional)
         if p['vol_filter']:
@@ -424,9 +472,15 @@ class VolatilityRegimeEngine:
         df['Vol_StdDev'] = returns.rolling(length).std() * np.sqrt(252) * 100
         
         # Bollinger Bands Width (volatility proxy)
-        df['BB_Upper'], df['BB_Middle'], df['BB_Lower'] = talib.BBANDS(
-            df['Close'], timeperiod=length, nbdevup=2, nbdevdn=2, matype=0
-        )
+        if TALIB_AVAILABLE:
+            df['BB_Upper'], df['BB_Middle'], df['BB_Lower'] = talib.BBANDS(
+                df['Close'], timeperiod=length, nbdevup=2, nbdevdn=2, matype=0
+            )
+        else:
+            df['BB_Upper'], df['BB_Middle'], df['BB_Lower'] = calculate_bbands(
+                df['Close'], period=length, nbdevup=2, nbdevdn=2
+            )
+        
         df['BB_Width'] = (df['BB_Upper'] - df['BB_Lower']) / df['BB_Middle'] * 100
         
         # Regime classification (Pine Script style)
@@ -1049,6 +1103,10 @@ def main():
         status_color = "🟢" if api_key else "🔴"
         st.info(f"{status_color} System Status: {'Operational' if api_key else 'Awaiting API Key'}")
         
+        # TA-Lib status
+        talib_status = "🟢 Available" if TALIB_AVAILABLE else "⚠️ Fallback Mode"
+        st.info(f"{talib_status} TA-Lib: {'Native' if TALIB_AVAILABLE else 'Python'}")
+        
         # Show broadcast count
         if st.session_state.broadcast_count > 0:
             st.metric("Broadcasts Sent", st.session_state.broadcast_count)
@@ -1231,7 +1289,8 @@ def main():
                                     "ticker": ticker,
                                     "timeframe": tf,
                                     "timestamp": datetime.now().isoformat(),
-                                    "message_preview": edited_msg[:100] + "..."
+                                    "message_preview": edited_msg[:100] + "...",
+                                    "template": template_type
                                 })
                                 st.session_state.broadcast_count += 1
                                 
@@ -1241,6 +1300,7 @@ def main():
                                         f.write(f"\n\n{'='*50}\n")
                                         f.write(f"Time: {datetime.now()}\n")
                                         f.write(f"Ticker: {ticker} ({tf})\n")
+                                        f.write(f"Template: {template_type}\n")
                                         f.write(f"Message:\n{edited_msg}\n")
                                 except:
                                     pass  # Fail silently for logging
@@ -1265,6 +1325,7 @@ def main():
             for idx, signal in enumerate(st.session_state.signal_history[-10:]):  # Last 10
                 with st.expander(f"Signal {idx+1}: {signal['ticker']} ({signal['timeframe']}) - {signal['timestamp'][:19]}"):
                     st.text(signal['message_preview'])
+                    st.caption(f"Template: {signal.get('template', 'unknown')}")
             
             # Metrics
             col_hist, col_metrics = st.columns([0.6, 0.4])
@@ -1283,12 +1344,14 @@ def main():
                 # Ticker frequency
                 if 'ticker' in hist_df.columns:
                     ticker_counts = hist_df['ticker'].value_counts()
-                    st.metric("Most Broadcasted", ticker_counts.index[0])
+                    if not ticker_counts.empty:
+                        st.metric("Most Broadcasted", ticker_counts.index[0])
                 
                 # Timeframe distribution
                 if 'timeframe' in hist_df.columns:
                     tf_counts = hist_df['timeframe'].value_counts()
-                    st.metric("Primary Timeframe", tf_counts.index[0])
+                    if not tf_counts.empty:
+                        st.metric("Primary Timeframe", tf_counts.index[0])
 
 if __name__ == "__main__":
     main()
