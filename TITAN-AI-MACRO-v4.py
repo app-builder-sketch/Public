@@ -49,6 +49,71 @@ def inject_terminal_css():
     """, unsafe_allow_html=True)
 
 # ==========================================
+# 1B. SECRETS HELPERS (ROBUST + SAFE DIAGNOSTICS)
+# ==========================================
+def _safe_get_nested(secrets_obj, path):
+    """
+    Safely traverse st.secrets using a list/tuple path like ("openai","api_key").
+    Returns (value, True) if found and truthy, else ("", False).
+    """
+    try:
+        cur = secrets_obj
+        for k in path:
+            cur = cur[k]
+        if cur is None:
+            return "", False
+        cur_s = str(cur).strip()
+        return (cur_s, True) if cur_s else ("", False)
+    except Exception:
+        return "", False
+
+def secret_resolve(*candidate_paths):
+    """
+    Try multiple candidate paths against st.secrets.
+    Each candidate can be:
+      - tuple/list path: ("openai","api_key")
+      - str key: "OPENAI_API_KEY"
+    Returns (value, found_bool, matched_path_repr)
+    """
+    for cand in candidate_paths:
+        if isinstance(cand, (list, tuple)):
+            v, ok = _safe_get_nested(st.secrets, cand)
+            if ok:
+                return v, True, "->".join(map(str, cand))
+        else:
+            v, ok = _safe_get_nested(st.secrets, (cand,))
+            if ok:
+                return v, True, str(cand)
+    return "", False, ""
+
+def secrets_diagnostics(required_checks):
+    """
+    required_checks: dict[label] = (value, found, matched_path)
+    Displays safe diagnostics (no values).
+    """
+    with st.expander("🔐 Secrets Diagnostics (safe — no values shown)", expanded=False):
+        try:
+            top_keys = list(st.secrets.keys())
+        except Exception:
+            top_keys = []
+        st.write("Top-level keys detected in `st.secrets`:")
+        st.code(", ".join(top_keys) if top_keys else "(none detected)")
+
+        rows = []
+        for label, (val, found, matched) in required_checks.items():
+            rows.append({
+                "Secret": label,
+                "Present": "✅" if found else "❌",
+                "Matched Path": matched if matched else "(not found)"
+            })
+        st.dataframe(pd.DataFrame(rows), use_container_width=True, height=180)
+
+        st.caption(
+            "If nothing is detected: locally ensure `.streamlit/secrets.toml` exists next to your app, "
+            "or on Streamlit Cloud set secrets in the app settings."
+        )
+
+# ==========================================
 # 2. DATA SERVICES (200+ TICKERS)
 # ==========================================
 class TickerService:
@@ -62,12 +127,10 @@ class TickerService:
 
     @staticmethod
     def classify(ticker: str) -> str:
-        # Asset-class mapping rules
         if ticker.endswith("-USD"):
             return "CRYPTO"
         if ticker.endswith("=X") or ticker == "DX-Y.NYB":
             return "FX"
-        # Use the same lists already present (no assumptions beyond this script)
         if ticker in ["SPY", "QQQ", "IWM", "DIA", "TLT", "VXX", "GLD", "SLV", "USO", "UNG", "XLE", "XLF", "XLK", "XLV", "XLY", "XLP", "XLI", "XLU", "ARKK", "SMH"]:
             return "ETF/INDEX"
         return "STOCK"
@@ -90,37 +153,28 @@ def fetch_data(ticker, timeframe):
 # 3. LIVE ADAPTABLE TRADINGVIEW HEADER
 # ==========================================
 def _default_tv_symbol(selected_ticker: str) -> str:
-    # Special case: Yahoo's Dollar Index ticker
     if selected_ticker == "DX-Y.NYB":
         return "TVC:DXY"
 
     asset_class = TickerService.classify(selected_ticker)
-
     clean = selected_ticker.replace("-USD", "").replace("=X", "").upper()
 
     if asset_class == "CRYPTO":
-        # Keep original BINANCE mapping style
         return f"BINANCE:{clean}USDT"
     if asset_class == "FX":
-        # Use FX:<PAIR> style for typical ticker tape widgets
         return f"FX:{clean}"
     if asset_class == "ETF/INDEX":
-        # Default to NYSEARCA for ETFs (user can override)
         return f"NYSEARCA:{clean}"
-    # STOCK
     return f"NASDAQ:{clean}"
 
 def render_tv_header(selected_ticker, tv_exchange_prefix_override: str = "", tv_symbol_override_full: str = ""):
-    # If user provides a full override like "NASDAQ:AAPL", use it directly.
     if tv_symbol_override_full.strip():
         selected_symbol = tv_symbol_override_full.strip().upper()
         selected_title = selected_ticker.replace("-USD", "").replace("=X", "").upper()
     else:
-        # Default symbol by asset class
         default_symbol = _default_tv_symbol(selected_ticker)
         selected_title = selected_ticker.replace("-USD", "").replace("=X", "").upper()
 
-        # If user overrides exchange prefix only, rebuild symbol as PREFIX:<SYMBOL_PART>
         if tv_exchange_prefix_override.strip():
             prefix = tv_exchange_prefix_override.strip().upper()
             if ":" in default_symbol:
@@ -161,12 +215,10 @@ class FlowEngine:
 class AxiomEngine:
     @staticmethod
     def calculate(df, length=50):
-        # CHEDO Entropy
         log_ret = np.diff(np.log(df['Close'].values), prepend=np.log(df['Close'].iloc[0]))
         ent = pd.Series(log_ret**2).rolling(length).sum().values
         df['CHEDO'] = np.tanh(ent * 10)
 
-        # Apex Flux Efficiency (HARDENED: guard rg == 0)
         rg = (df['High'] - df['Low']).astype(float)
         body = np.abs(df['Close'] - df['Open']).astype(float)
 
@@ -174,7 +226,6 @@ class AxiomEngine:
         ratio = (body / safe_rg).replace([np.inf, -np.inf], np.nan).fillna(0.0)
         df['Flux'] = ratio.ewm(span=14).mean() * np.sign(df['Close'] - df['Open'])
 
-        # RQZO Relativity
         df['RQZO'] = np.abs(df['Close'].pct_change()).rolling(length).mean() * 1000
         return df
 
@@ -182,10 +233,6 @@ class AxiomEngine:
 # 4B. AI PARAMETER OPTIMIZER (APO)
 # ==========================================
 def ai_optimize_params(api_key: str, model_name: str, ticker: str, timeframe: str, df: pd.DataFrame, default_len_f: int = 21, default_len_s: int = 50):
-    """
-    APO returns a dict: {"len_f": int, "len_s": int, "raw": str}
-    Safe fallback to defaults on any failure.
-    """
     out = {"len_f": default_len_f, "len_s": default_len_s, "raw": ""}
 
     if not api_key:
@@ -196,7 +243,6 @@ def ai_optimize_params(api_key: str, model_name: str, ticker: str, timeframe: st
         out["raw"] = "APO skipped: insufficient data."
         return out
 
-    # Compute compact summary (no assumptions beyond what's in the DF)
     recent = df.tail(200).copy()
     close = recent["Close"]
     returns = close.pct_change().dropna()
@@ -240,12 +286,10 @@ Goal:
         raw = resp.choices[0].message.content.strip()
         out["raw"] = raw
 
-        # Parse JSON safely
         data = json.loads(raw)
         len_f = int(data.get("len_f", default_len_f))
         len_s = int(data.get("len_s", default_len_s))
 
-        # Enforce constraints
         len_f = max(5, min(100, len_f))
         len_s = max(10, min(200, len_s))
         if len_s <= len_f:
@@ -267,9 +311,6 @@ def _init_delivery_log():
         st.session_state.delivery_log = []
 
 def telegram_send(bot_token: str, chat_id: str, text: str, timeout_sec: int = 10):
-    """
-    Returns dict with: ok(bool), status_code(int|None), response_text(str), response_snippet(str)
-    """
     result = {"ok": False, "status_code": None, "response_text": "", "response_snippet": ""}
     try:
         r = requests.post(
@@ -282,8 +323,7 @@ def telegram_send(bot_token: str, chat_id: str, text: str, timeout_sec: int = 10
         snippet = (result["response_text"][:220] + "…") if len(result["response_text"]) > 220 else result["response_text"]
         result["response_snippet"] = snippet
 
-        if r.status_code >= 200 and r.status_code < 300:
-            # Telegram responses usually include {"ok": true/false, ...}
+        if 200 <= r.status_code < 300:
             try:
                 payload = r.json()
                 result["ok"] = bool(payload.get("ok", True))
@@ -302,11 +342,9 @@ def telegram_send(bot_token: str, chat_id: str, text: str, timeout_sec: int = 10
 def append_delivery_log(entry: dict):
     _init_delivery_log()
     st.session_state.delivery_log.insert(0, entry)
-    # Keep log small
     st.session_state.delivery_log = st.session_state.delivery_log[:50]
 
 def build_message(report_type: str, ticker: str, tf: str, last: pd.Series) -> str:
-    # STRICT SIGNAL (original style preserved, expanded with timeframe)
     if report_type == "STRICT SIGNAL":
         return (
             f"🚀 TITAN SIGNAL: {ticker}\n"
@@ -316,7 +354,6 @@ def build_message(report_type: str, ticker: str, tf: str, last: pd.Series) -> st
             f"Entropy: {last['CHEDO']:.2f}"
         )
 
-    # RISK template
     if report_type == "RISK":
         atr = last.get("ATR", np.nan)
         rqzo = last.get("RQZO", np.nan)
@@ -334,7 +371,6 @@ def build_message(report_type: str, ticker: str, tf: str, last: pd.Series) -> st
             f"Risk Note: Entropy > 0.80 = Critical Instability; Flux magnitude > 0.60 = High-efficiency impulse."
         )
 
-    # MARKET SUMMARY template
     if report_type == "MARKET SUMMARY":
         spread = abs(last["FastMA"] - last["SlowMA"])
         return (
@@ -347,7 +383,6 @@ def build_message(report_type: str, ticker: str, tf: str, last: pd.Series) -> st
             f"Signal: {'Trend Flip Long Trigger' if bool(last.get('long_trigger', False)) else 'No Fresh Trigger'}"
         )
 
-    # Fallback (should not happen)
     return (
         f"🚀 TITAN SIGNAL: {ticker}\n"
         f"Timeframe: {tf}\n"
@@ -363,24 +398,43 @@ def main():
     inject_terminal_css()
     _init_delivery_log()
 
-    # --- SECRETS MODE (optional) ---
-    def _get_secret(path_a: str, path_b: str, default=""):
-        # Supports st.secrets["a"]["b"] access
-        try:
-            return st.secrets[path_a][path_b]
-        except Exception:
-            return default
-
     with st.sidebar:
         st.header("⚙️ TERMINAL CONTROL")
 
         use_secrets = st.toggle("Use st.secrets (recommended)", value=False)
 
+        # Resolve secrets using multiple candidate keys (nested and flat)
+        openai_val, openai_found, openai_match = secret_resolve(
+            ("openai", "api_key"),
+            "OPENAI_API_KEY",
+            "openai_api_key",
+            "openai-key",
+        )
+        tg_token_val, tg_token_found, tg_token_match = secret_resolve(
+            ("telegram", "bot_token"),
+            "TELEGRAM_BOT_TOKEN",
+            "telegram_bot_token",
+            "telegram.bot_token",
+        )
+        tg_chat_val, tg_chat_found, tg_chat_match = secret_resolve(
+            ("telegram", "chat_id"),
+            "TELEGRAM_CHAT_ID",
+            "telegram_chat_id",
+            "telegram.chat_id",
+        )
+
+        # Safe diagnostics panel (no values)
+        secrets_diagnostics({
+            "OpenAI API Key": (openai_val, openai_found, openai_match),
+            "Telegram Bot Token": (tg_token_val, tg_token_found, tg_token_match),
+            "Telegram Chat ID": (tg_chat_val, tg_chat_found, tg_chat_match),
+        })
+
         # OpenAI Key + APO
         if use_secrets:
-            api_key = _get_secret("openai", "api_key", "")
+            api_key = openai_val
             if not api_key:
-                st.warning("st.secrets missing: openai.api_key — you can enter it manually below.")
+                st.warning("OpenAI key not found in st.secrets. Enter manually below.")
                 api_key = st.text_input("OpenAI Key", type="password")
         else:
             api_key = st.text_input("OpenAI Key", type="password")
@@ -417,10 +471,10 @@ def main():
 
         # Telegram credentials
         if use_secrets:
-            tg_token = _get_secret("telegram", "bot_token", "")
-            tg_chat = _get_secret("telegram", "chat_id", "")
+            tg_token = tg_token_val
+            tg_chat = tg_chat_val
             if not tg_token or not tg_chat:
-                st.warning("st.secrets missing: telegram.bot_token and/or telegram.chat_id — you can enter them manually below.")
+                st.warning("Telegram secrets not found in st.secrets. Enter manually below.")
                 tg_token = st.text_input("Telegram Bot Token", type="password", value=tg_token)
                 tg_chat = st.text_input("Telegram Chat ID", value=tg_chat)
         else:
@@ -430,14 +484,13 @@ def main():
     render_tv_header(ticker, tv_exchange_prefix_override=tv_exchange_prefix_override, tv_symbol_override_full=tv_symbol_override_full)
 
     df, data_err = fetch_data(ticker, tf)
-
     if data_err:
         st.warning(data_err)
 
     if not df.empty:
         df = AxiomEngine.calculate(df)
 
-        # APO param selection
+        # APO params
         len_f, len_s = 21, 50
         apo_debug = ""
         if use_ai:
@@ -450,7 +503,6 @@ def main():
 
         tab1, tab2, tab3 = st.tabs(["📊 Macro Intelligence", "⚛️ Quantitative Physics", "📡 Global Broadcast"])
 
-        # --- TAB 1: MACRO INTELLIGENCE ---
         with tab1:
             col_chart, col_text = st.columns([0.7, 0.3])
 
@@ -482,11 +534,9 @@ def main():
                     with st.expander("APO Debug (raw model output)", expanded=False):
                         st.code(apo_debug)
 
-        # --- TAB 2: QUANTUM PHYSICS ---
         with tab2:
             st.subheader("⚛️ Axiom Physics Suite")
 
-            # Row 1: CHEDO Entropy
             c1_plot, c1_text = st.columns([0.7, 0.3])
             with c1_plot:
                 fig_chedo = go.Figure(go.Scatter(x=df.index, y=df['CHEDO'], fill='tozeroy', line=dict(color='#00F0FF')))
@@ -498,7 +548,6 @@ def main():
                 Values > 0.8 indicate <span class="highlight">Critical Instability</span>, suggesting an imminent snap-back or trend exhaustion.
                 </div></div>""", unsafe_allow_html=True)
 
-            # Row 2: Apex Flux
             c2_plot, c2_text = st.columns([0.7, 0.3])
             with c2_plot:
                 colors = ['#00E676' if x > 0 else '#FF1744' for x in df['Flux']]
@@ -511,16 +560,10 @@ def main():
                 Scores > 0.6 indicate <span class="highlight">Superconductor State</span> where price moves with zero friction.
                 </div></div>""", unsafe_allow_html=True)
 
-        # --- TAB 3: BROADCAST ---
         with tab3:
             st.header("📡 Global Broadcaster")
 
-            report_type = st.selectbox(
-                "Report Template",
-                ["STRICT SIGNAL", "RISK", "MARKET SUMMARY"],
-                index=0
-            )
-
+            report_type = st.selectbox("Report Template", ["STRICT SIGNAL", "RISK", "MARKET SUMMARY"], index=0)
             msg = build_message(report_type, ticker, tf, last)
             st.code(msg)
 
@@ -529,10 +572,9 @@ def main():
             with col_send:
                 if st.button("Send to Telegram"):
                     if not tg_token or not tg_chat:
-                        st.error("Missing Telegram credentials: provide Bot Token and Chat ID (or enable st.secrets mode with telegram.bot_token and telegram.chat_id).")
+                        st.error("Missing Telegram credentials: provide Bot Token and Chat ID (or enable secrets mode with matching keys).")
                     else:
                         result = telegram_send(tg_token, tg_chat, msg, timeout_sec=10)
-
                         entry = {
                             "timestamp": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC"),
                             "ticker": ticker,
