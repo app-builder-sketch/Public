@@ -544,20 +544,18 @@ def smc_structure(df: pd.DataFrame, pivot_len: int = 5, use_close: bool = True) 
     return df
 
 # -----------------------------------------------------------------------------
-# AI Trade Plan Schema (Pydantic-like dict validation)
 @dataclass
 class TradePlan:
-    market_bias: str  # "bull", "bear", "neutral"
-    confidence: float  # 0-100
-    timeframe: str
-    setup_name: Optional[str] = None
-    entry_trigger: str
+    market_bias: str  # no default
+    confidence: float  # no default
+    timeframe: str  # no default
+    entry_trigger: str  # no default – must appear BEFORE any field with a default
+    setup_name: Optional[str] = None  # default now allowed
     entry_range: Optional[Tuple[float, float]] = None
     invalidation_level: Optional[float] = None
     stop_loss: Optional[float] = None
-    trailing_stop: Optional[Dict[str, Any]] = None  # {"method": "ATR", "activation": "entry"}
+    trailing_stop: Optional[Dict[str, Any]] = None
     take_profit_ladder: List[Dict[str, Any]] = field(default_factory=list)
-    # Each TP: {"level": float, "rr": float, "instruction": "partial 50%, move stop to entry"}
     reasons: List[str] = field(default_factory=list)
     when_not_to_take: List[str] = field(default_factory=list)
     warnings: List[str] = field(default_factory=list)
