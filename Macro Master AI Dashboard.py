@@ -76,7 +76,7 @@ def get_data(ticker_symbol, period="1y", interval="1d"):
         if isinstance(data.columns, pd.MultiIndex):
             data.columns = data.columns.get_level_values(0)
 
-        # --- MANUAL TECHNICAL ANALYSIS (Pure Pandas) ---
+        # --- MANUAL TECHNICAL ANALYSIS (Pure Pandas - NO pandas_ta) ---
         
         # 1. Moving Averages (SMA)
         data['SMA_50'] = data['Close'].rolling(window=50).mean()
@@ -86,7 +86,7 @@ def get_data(ticker_symbol, period="1y", interval="1d"):
         delta = data['Close'].diff()
         gain = (delta.where(delta > 0, 0)).fillna(0)
         loss = (-delta.where(delta < 0, 0)).fillna(0)
-        # Use exponential weighted moving average (Wilder's method approx)
+        # Use exponential weighted moving average
         avg_gain = gain.ewm(com=13, min_periods=14).mean()
         avg_loss = loss.ewm(com=13, min_periods=14).mean()
         rs = avg_gain / avg_loss
@@ -105,12 +105,9 @@ def get_data(ticker_symbol, period="1y", interval="1d"):
         data['BB_Lower'] = data['BB_Middle'] - (data['BB_Std'] * 2)
         
         # 5. ATR (Average True Range) - 14 period
-        # Calculate True Range components
         high_low = data['High'] - data['Low']
         high_close = np.abs(data['High'] - data['Close'].shift())
         low_close = np.abs(data['Low'] - data['Close'].shift())
-        
-        # Combine into a DataFrame to find the max per row
         tr_df = pd.concat([high_low, high_close, low_close], axis=1)
         data['TR'] = tr_df.max(axis=1)
         data['ATR_14'] = data['TR'].rolling(window=14).mean()
@@ -196,7 +193,7 @@ if df is not None:
     prev_close = df['Close'].iloc[-2]
     change_pct = ((last_close - prev_close) / prev_close) * 100
     
-    # Safe checks for NaN (in case data is too short for indicators)
+    # Safe checks for NaN
     rsi_val = df['RSI_14'].iloc[-1] if not pd.isna(df['RSI_14'].iloc[-1]) else 50.0
     sma_50 = df['SMA_50'].iloc[-1] if not pd.isna(df['SMA_50'].iloc[-1]) else last_close
     sma_200 = df['SMA_200'].iloc[-1] if not pd.isna(df['SMA_200'].iloc[-1]) else last_close
@@ -238,11 +235,8 @@ if df is not None:
         
         # Indicators Dataframe
         st.subheader("Key Indicator Levels")
-        
-        # Prepare tail dataframe with mapped column names for display
         display_df = df.tail(5)[['Close', 'RSI_14', 'SMA_50', 'SMA_200', 'BB_Upper', 'BB_Lower']].copy()
         display_df = display_df.style.format("{:.2f}")
-        
         st.dataframe(display_df, use_container_width=True)
 
     with tab2:
