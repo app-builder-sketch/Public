@@ -1,7 +1,7 @@
 import streamlit as st
 import yfinance as yf
 import pandas as pd
-import pandas_ta as ta
+import numpy as np
 import plotly.graph_objects as go
 import openai
 from datetime import datetime, timedelta
@@ -33,7 +33,6 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # --- TICKER MAPPING (TV -> Yahoo Finance) ---
-# This maps the TradingView specific syntax from your list to Yahoo Finance tickers
 TICKER_MAP = {
     # MACRO
     "TVC:US10Y": "^TNX", "TVC:US02Y": "^IRX", "TVC:VIX": "^VIX", "TVC:DXY": "DX-Y.NYB",
@@ -67,24 +66,55 @@ CATEGORIES = {
 
 @st.cache_data(ttl=300)
 def get_data(ticker_symbol, period="1y", interval="1d"):
-    """Fetches historical data and calculates basic TA."""
+    """Fetches historical data and manually calculates TA using pure Pandas."""
     try:
         data = yf.download(ticker_symbol, period=period, interval=interval, progress=False)
         if data.empty:
             return None
         
-        # Flatten MultiIndex columns if present (common in new yfinance)
+        # Flatten MultiIndex columns if present (fix for recent yfinance updates)
         if isinstance(data.columns, pd.MultiIndex):
             data.columns = data.columns.get_level_values(0)
 
-        # Basic Technical Indicators using Pandas TA
-        data.ta.rsi(length=14, append=True)
-        data.ta.macd(append=True)
-        data.ta.sma(length=50, append=True)
-        data.ta.sma(length=200, append=True)
-        data.ta.bbands(length=20, append=True)
-        data.ta.atr(length=14, append=True)
+        # --- MANUAL TECHNICAL ANALYSIS (Pure Pandas) ---
         
+        # 1. Moving Averages (SMA)
+        data['SMA_50'] = data['Close'].rolling(window=50).mean()
+        data['SMA_200'] = data['Close'].rolling(window=200).mean()
+        
+        # 2. RSI (Relative Strength Index) - 14 period
+        delta = data['Close'].diff()
+        gain = (delta.where(delta > 0, 0)).fillna(0)
+        loss = (-delta.where(delta < 0, 0)).fillna(0)
+        # Use exponential weighted moving average (Wilder's method approx)
+        avg_gain = gain.ewm(com=13, min_periods=14).mean()
+        avg_loss = loss.ewm(com=13, min_periods=14).mean()
+        rs = avg_gain / avg_loss
+        data['RSI_14'] = 100 - (100 / (1 + rs))
+
+        # 3. MACD (12, 26, 9)
+        exp1 = data['Close'].ewm(span=12, adjust=False).mean()
+        exp2 = data['Close'].ewm(span=26, adjust=False).mean()
+        data['MACD'] = exp1 - exp2
+        data['MACD_Signal'] = data['MACD'].ewm(span=9, adjust=False).mean()
+        
+        # 4. Bollinger Bands (20, 2)
+        data['BB_Middle'] = data['Close'].rolling(window=20).mean()
+        data['BB_Std'] = data['Close'].rolling(window=20).std()
+        data['BB_Upper'] = data['BB_Middle'] + (data['BB_Std'] * 2)
+        data['BB_Lower'] = data['BB_Middle'] - (data['BB_Std'] * 2)
+        
+        # 5. ATR (Average True Range) - 14 period
+        # Calculate True Range components
+        high_low = data['High'] - data['Low']
+        high_close = np.abs(data['High'] - data['Close'].shift())
+        low_close = np.abs(data['Low'] - data['Close'].shift())
+        
+        # Combine into a DataFrame to find the max per row
+        tr_df = pd.concat([high_low, high_close, low_close], axis=1)
+        data['TR'] = tr_df.max(axis=1)
+        data['ATR_14'] = data['TR'].rolling(window=14).mean()
+
         return data
     except Exception as e:
         st.error(f"Error fetching data: {e}")
@@ -165,9 +195,12 @@ if df is not None:
     last_close = df['Close'].iloc[-1]
     prev_close = df['Close'].iloc[-2]
     change_pct = ((last_close - prev_close) / prev_close) * 100
-    rsi_val = df['RSI_14'].iloc[-1]
-    sma_50 = df['SMA_50'].iloc[-1]
-    sma_200 = df['SMA_200'].iloc[-1]
+    
+    # Safe checks for NaN (in case data is too short for indicators)
+    rsi_val = df['RSI_14'].iloc[-1] if not pd.isna(df['RSI_14'].iloc[-1]) else 50.0
+    sma_50 = df['SMA_50'].iloc[-1] if not pd.isna(df['SMA_50'].iloc[-1]) else last_close
+    sma_200 = df['SMA_200'].iloc[-1] if not pd.isna(df['SMA_200'].iloc[-1]) else last_close
+    atr_val = df['ATR_14'].iloc[-1] if not pd.isna(df['ATR_14'].iloc[-1]) else 0.0
     
     # Determine Trend
     trend = "Bullish (Price > SMA50)" if last_close > sma_50 else "Bearish (Price < SMA50)"
@@ -177,8 +210,8 @@ if df is not None:
         trend += " & Death Cross Active"
 
     # Determine MACD Status
-    macd = df['MACD_12_26_9'].iloc[-1]
-    macdsignal = df['MACDs_12_26_9'].iloc[-1]
+    macd = df['MACD'].iloc[-1] if not pd.isna(df['MACD'].iloc[-1]) else 0
+    macdsignal = df['MACD_Signal'].iloc[-1] if not pd.isna(df['MACD_Signal'].iloc[-1]) else 0
     macd_status = "Bullish Crossover" if macd > macdsignal else "Bearish Divergence"
 
     # Top Metrics Row
@@ -186,7 +219,7 @@ if df is not None:
     col1.metric("Price", f"{last_close:.2f}", f"{change_pct:.2f}%")
     col2.metric("RSI (14)", f"{rsi_val:.1f}", delta=None)
     col3.metric("Trend", "Bullish" if last_close > sma_200 else "Bearish")
-    col4.metric("Volatility (ATR)", f"{df['ATRr_14'].iloc[-1]:.2f}")
+    col4.metric("Volatility (ATR)", f"{atr_val:.2f}")
 
     # --- TABS ---
     tab1, tab2, tab3 = st.tabs(["📈 Technical Charts", "🤖 AI Analyst Report", "📋 Fundamental Data"])
@@ -203,9 +236,14 @@ if df is not None:
         fig.update_layout(title=f'{selected_tv_ticker} Price Action', height=600, template="plotly_dark")
         st.plotly_chart(fig, use_container_width=True)
         
-        # Indicators
-        st.subheader("Key Levels")
-        st.dataframe(df.tail(5)[['Close', 'RSI_14', 'SMA_50', 'SMA_200', 'BBU_20_2.0', 'BBL_20_2.0']], use_container_width=True)
+        # Indicators Dataframe
+        st.subheader("Key Indicator Levels")
+        
+        # Prepare tail dataframe with mapped column names for display
+        display_df = df.tail(5)[['Close', 'RSI_14', 'SMA_50', 'SMA_200', 'BB_Upper', 'BB_Lower']].copy()
+        display_df = display_df.style.format("{:.2f}")
+        
+        st.dataframe(display_df, use_container_width=True)
 
     with tab2:
         st.subheader("🧠 Generative AI Market Insight")
